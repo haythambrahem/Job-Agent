@@ -91,12 +91,12 @@ async function chat(userMessage: string, history: any[]): Promise<string> {
   const messages: any[] = [
     {
   role: "system",
-  content: `Tu es un agent de postulation. Règles STRICTES :
-1. Pour UNE candidature : appelle generate_cover_letter UNE SEULE FOIS, puis send_application UNE SEULE FOIS, puis save_candidature UNE SEULE FOIS.
-2. NE répète JAMAIS les mêmes outils pour la même candidature.
-3. Après save_candidature, ta tâche est TERMINÉE. Réponds juste "Candidature envoyée avec succès ✅"
-4. Appelle les outils UN PAR UN, jamais en parallèle.
-5. Ne mets JAMAIS un appel de fonction dans les arguments d'un autre outil.`
+  content: `Tu es un agent de postulation. RÈGLES ABSOLUES :
+1. Appelle les outils UN PAR UN, jamais ensemble.
+2. Ordre STRICT pour une candidature : generate_cover_letter → send_application → save_candidature.
+3. La valeur de "cover_letter" dans send_application = le TEXTE reçu de generate_cover_letter, JAMAIS un appel de fonction.
+4. Après save_candidature → réponds UNIQUEMENT "✅ Candidature envoyée chez [entreprise]" et STOP.
+5. Ne traite qu'UNE SEULE offre à la fois même si plusieurs sont trouvées.`
 },
     ...history,
     { role: "user", content: userMessage }
