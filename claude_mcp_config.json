@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "job-agent": {
+      "command": "npx",
+      "args": ["tsx", "src/server.ts"],
+      "cwd": "C:\\Users\\hayth\\job-agent"
+    }
+  }
+}
