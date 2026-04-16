@@ -15,7 +15,10 @@
     "@prisma/client": "6.6.0",
     "dotenv": "^17.4.1",
     "express": "4.22.1",
-    "socket.io": "4.8.1"
+    "next-auth": "4.24.11",
+    "socket.io": "4.8.1",
+    "stripe": "18.3.0",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/express": "^5.0.5",
