@@ -1,102 +1,81 @@
-# Job-Agent
+# Job-Agent SaaS Platform
 
-Job-Agent is a TypeScript automation project that helps search job offers, generate tailored cover letters with Groq, send applications via Gmail, and track applications in Excel.
+Production SaaS refactor of the original CLI job agent into a monorepo architecture.
 
-## Tech stack
-
-- **Runtime:** Node.js + TypeScript (`tsx`)
-- **AI:** `groq-sdk` (LLM calls for matching and cover-letter generation)
-- **Automation/Scraping:** `playwright`
-- **Email:** `googleapis` (Gmail API + OAuth2)
-- **Document processing:** `pdfjs-dist` (read CV from PDF)
-- **Tracking:** `exceljs` (store applications in `.xlsx`)
-- **MCP integration:** `@modelcontextprotocol/sdk`
-
-## Repository structure
+## Monorepo structure
 
 ```text
-src/
-  agent.ts            # Interactive CLI agent (tool-calling loop with Groq)
-  pipeline.ts         # Daily pipeline (search → match → apply → track → summary email)
-  server.ts           # MCP server exposing tools over stdio
-  tools/
-    scraper.ts        # Multi-source scraping (LinkedIn, TanitJobs, Indeed)
-    linkedin.ts       # LinkedIn-only job search helper
-    matcher.ts        # CV/job matching with AI score + reasons
-    cv.ts             # CV PDF extraction + cover letter generation
-    gmail.ts          # Gmail OAuth + application email sending
-    tracker.ts        # Excel persistence for candidatures
-scripts/
-  schedule.bat        # Windows Task Scheduler example for daily pipeline
+apps/
+  api/        # Express API + Prisma + Socket.io
+  web/        # React + Vite + Tailwind dashboard
+packages/
+  core/       # Shared business logic (scraping, AI, matching, email, pipeline)
 ```
 
-## How code is organized
+## Key capabilities
 
-### 1) `src/agent.ts` (interactive assistant)
-- Starts a CLI chat session.
-- Registers callable tools (`search_jobs`, `generate_cover_letter`, `send_application`, `save_candidature`).
-- Uses a strict system prompt to enforce application order.
-- Executes each tool call and feeds tool outputs back to the model.
+- Job scraping pipeline (multi-source Playwright scraping)
+- CV matching + AI cover letter generation
+- Approval-first application flow (`pending -> approved -> sent`)
+- Database persistence with Prisma + SQLite (ready to upgrade to Postgres)
+- API endpoints for jobs, applications, approvals, and previews
+- React dashboard with sidebar, stats cards, jobs list, applications table, and approval modal
+- Real-time frontend refresh through Socket.io events
+- Basic production safety: input checks, rate limiting, request/action logging, approval gate before send
 
-### 2) `src/pipeline.ts` (batch automation)
-- Reads CV text.
-- Scrapes jobs for configured keywords/location.
-- Scores each job against CV (`matcher.ts`).
-- For strong matches, generates letter + sends Gmail + logs in Excel.
-- Produces final stats and sends a summary email.
+## API endpoints
 
-### 3) `src/server.ts` (MCP mode)
-- Exposes core tools through MCP (`stdio` transport).
-- Intended for MCP-compatible clients using local process execution.
+### Jobs
+- `GET /jobs`
+- `POST /jobs/search`
 
-### 4) `src/tools/*` (single-responsibility modules)
-- Each file handles one domain (scraping, AI generation, Gmail, tracking).
-- High-level flows (`agent.ts`/`pipeline.ts`) compose these tool functions.
+### Applications
+- `GET /applications`
+- `POST /applications/apply`
+- `GET /applications/:id/preview`
+- `POST /applications/:id/approve`
+- `POST /applications/:id/reject`
 
-## Setup
+## Local setup
 
-### 1) Install dependencies
+1. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 2) Environment/config files
-
-Create and provide:
-
-- `.env` with at least:
-  - `GROQ_API_KEY=<your_key>`
-- `credentials.json` for Gmail OAuth client credentials.
-- (Generated on first OAuth flow) `token.json`.
-- Optional: `cv.pdf` at repo root (used as CV attachment and for CV text extraction).
-
-## Run modes
-
-### Interactive agent
+2. Configure environment (example)
 
 ```bash
-npm start
+export DATABASE_URL='file:./prisma/dev.db'
+export GROQ_API_KEY='...'
+export WEB_ORIGIN='http://localhost:5173'
 ```
 
-### Dev watch mode
+3. Generate Prisma client and sync schema
 
 ```bash
-npm run dev
+DATABASE_URL='file:./prisma/dev.db' npm run db:generate
+DATABASE_URL='file:./prisma/dev.db' npm run db:push
 ```
 
-### Daily pipeline (direct)
+
+Web app API URL config:
 
 ```bash
-npx tsx src/pipeline.ts
+# apps/web/.env
+VITE_API_BASE_URL="http://localhost:4000"
 ```
 
-### MCP server
+4. Run apps
 
 ```bash
-npx tsx src/server.ts
+npm run dev:api
+npm run dev:web
 ```
 
-## Notes
+5. Build all workspaces
 
-- Main implementation language and many prompts/messages are in French.
+```bash
+npm run build
+```
