@@ -1,11 +1,11 @@
 import Groq from "groq-sdk";
-import { readCV } from "./cv.js";
 import type { GenerateCoverLetterInput } from "./types.js";
 
 const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
+const DEFAULT_CV_SUMMARY = "Développeur full-stack, Java, Spring Boot, Angular, 3 ans d'expérience";
 
 export async function generateCoverLetter(input: GenerateCoverLetterInput): Promise<string> {
-  const cvSummary = input.cvSummary || (await readCV());
+  const cvSummary = input.cvSummary || DEFAULT_CV_SUMMARY;
 
   if (!groq) {
     return `Madame, Monsieur,\n\nJe vous propose ma candidature pour le poste de ${input.jobTitle} chez ${input.company}. Mon expérience full-stack correspond à vos besoins et je serais ravi de contribuer à vos projets.\n\nCordialement,`;

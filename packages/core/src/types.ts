@@ -2,6 +2,7 @@ export type ApplicationStatus = "pending" | "approved" | "rejected" | "sent";
 
 export interface Job {
   id?: string;
+  userId?: string;
   title: string;
   company: string;
   url: string;
@@ -22,6 +23,7 @@ export interface MatchResult {
 
 export interface Application {
   id: string;
+  userId?: string;
   company: string;
   title: string;
   email: string;
