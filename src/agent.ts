@@ -135,8 +135,8 @@ async function main() {
   console.log("║   🚀 Job Application Agent  (gratuit)  ║");
   console.log("╚════════════════════════════════════════╝");
   console.log("\n💡 Exemples de commandes :");
-  console.log('   "Cherche des offres React en Tunisie"');
-  console.log('   "Envoie ma candidature à jobs@example.com pour React Developer chez Startup"');
+  console.log('   "Cherche des offres java en Tunisie"');
+  console.log('   "Envoie ma candidature à jobs@example.com pour java Developer chez Startup"');
   console.log('   "Montre moi mes candidatures"\n');
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
