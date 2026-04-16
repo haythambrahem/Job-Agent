@@ -97,6 +97,14 @@ const REQUIRED_ARGS: Record<string, string[]> = {
   get_candidatures: []
 };
 
+const ARG_TYPES: Record<string, Record<string, "string">> = {
+  search_jobs: { keywords: "string", location: "string" },
+  generate_cover_letter: { job_title: "string", company: "string", job_description: "string", cv_summary: "string" },
+  send_application: { to_email: "string", company: "string", job_title: "string", cover_letter: "string" },
+  save_candidature: { to_email: "string", company: "string", job_title: "string" },
+  get_candidatures: {}
+};
+
 function detectIntent(message: string): Intent {
   const text = message.toLowerCase();
   const hasWord = (pattern: string): boolean => new RegExp(`\\b${pattern}\\b`, "i").test(text);
@@ -133,14 +141,7 @@ function detectIntent(message: string): Intent {
     hasWord("voir") ||
     hasWord("liste");
 
-  if (
-    hasWord("candidature") ||
-    hasWord("candidatures") ||
-    hasWord("application") ||
-    text.includes("mes candidatures") ||
-    (hasHistoryNoun && hasHistoryContext) ||
-    hasWord("applications")
-  ) {
+  if (text.includes("mes candidatures") || hasHistoryNoun || hasHistoryContext) {
     return "history";
   }
 
@@ -148,8 +149,8 @@ function detectIntent(message: string): Intent {
 }
 
 function getForcedTool(intent: Intent, step: number): string | null {
-  if (step > 0) return null;
   if (intent === "history") return "get_candidatures";
+  if (step > 0) return null;
   if (intent === "search") return "search_jobs";
   if (intent === "apply") return "generate_cover_letter";
   return null;
@@ -173,7 +174,10 @@ function validateToolArgs(name: string, args: Record<string, any>): { valid: tru
   }
 
   for (const key of REQUIRED_ARGS[name]) {
-    if (typeof args[key] !== "string" || !args[key].trim()) {
+    if (!(key in args)) {
+      return { valid: false, reason: `missing required argument: ${key}` };
+    }
+    if (ARG_TYPES[name]?.[key] === "string" && (typeof args[key] !== "string" || !args[key].trim())) {
       return { valid: false, reason: `missing or invalid required argument: ${key}` };
     }
   }
@@ -275,9 +279,15 @@ async function chat(userMessage: string, history: any[]): Promise<string> {
       let args: Record<string, any> = {};
 
       if (toolName === "search_jobs" && intent === "history") {
-        console.warn("⚠️ Tool call bloqué: search_jobs interdit pour un intent history. Reroutage vers get_candidatures.");
-        toolName = "get_candidatures";
-        args = {};
+        const blockReason = "TOOL_BLOCKED: search_jobs interdit pour une demande d'historique. Utilise get_candidatures.";
+        console.warn(`⚠️ ${blockReason}`);
+        logToolDebug(userMessage, intent, toolName, { reason: blockReason, arguments: call.function.arguments });
+        messages.push({ role: "tool", tool_call_id: call.id, content: blockReason });
+        messages.push({
+          role: "system",
+          content: "Correction: pour cet intent history, appelle uniquement get_candidatures sans paramètres."
+        });
+        continue;
       } else {
         const parsed = parseToolArgs(call.function.arguments);
         if (!parsed.ok) {
