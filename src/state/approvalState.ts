@@ -20,7 +20,7 @@ export const approvalState: {
 };
 
 export function setPendingApplication(application: PendingApplication): boolean {
-  if (approvalState.pendingApplication || approvalState.decision !== null) {
+  if (approvalState.pendingApplication || approvalState.isApproved) {
     return false;
   }
   approvalState.pendingApplication = application;

@@ -6,17 +6,28 @@ import {
   setPendingApplication,
   type PendingApplication
 } from "../state/approvalState.js";
+import { APPROVAL_PREVIEW_MAX_BODY_BYTES, APPROVAL_UI_PORT } from "./config.js";
 
-const PORT = 3000;
 let isStarted = false;
 
 function readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     let raw = "";
+    let size = 0;
+    let rejected = false;
     req.on("data", (chunk) => {
+      if (rejected) return;
+      size += chunk.length;
+      if (size > APPROVAL_PREVIEW_MAX_BODY_BYTES) {
+        rejected = true;
+        reject(new Error("Request body too large"));
+        req.destroy();
+        return;
+      }
       raw += chunk.toString();
     });
     req.on("end", () => {
+      if (rejected) return;
       try {
         resolve(raw ? JSON.parse(raw) : {});
       } catch {
@@ -165,7 +176,8 @@ function renderPage(application: PendingApplication | null): string {
         setTimeout(() => window.location.reload(), 700);
       } catch (err) {
         const status = document.getElementById("status");
-        if (status) status.textContent = "Action failed: " + (err && err.message ? err.message : "unknown error");
+        const message = err instanceof Error ? err.message : "unknown error";
+        if (status) status.textContent = "Action failed: " + message;
       }
     }
     const approveBtn = document.getElementById("approve");
@@ -208,7 +220,11 @@ async function handlePreview(req: http.IncomingMessage, res: http.ServerResponse
       return;
     }
     sendJson(res, 200, { ok: true });
-  } catch {
+  } catch (err: any) {
+    if (err?.message === "Request body too large") {
+      sendJson(res, 413, { error: "Request body too large" });
+      return;
+    }
     sendJson(res, 400, { error: "Invalid JSON body" });
   }
 }
@@ -256,9 +272,9 @@ export async function startApprovalServer(): Promise<void> {
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(PORT, () => {
+    server.listen(APPROVAL_UI_PORT, () => {
       isStarted = true;
-      console.log(`🌐 Approval UI running at http://localhost:${PORT}`);
+      console.log(`🌐 Approval UI running at http://localhost:${APPROVAL_UI_PORT}`);
       resolve();
     });
   });

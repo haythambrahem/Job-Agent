@@ -7,6 +7,11 @@ import readline from "readline";
 import open from "open";
 import { approvalState, resetApprovalState } from "./state/approvalState.js";
 import { startApprovalServer } from "./ui/server.js";
+import {
+  APPROVAL_DECISION_POLL_INTERVAL_MS,
+  APPROVAL_DECISION_TIMEOUT_MS,
+  APPROVAL_UI_BASE_URL
+} from "./ui/config.js";
 import "dotenv/config";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -220,7 +225,7 @@ function getIntentBlockedToolReason(intent: Intent, toolName: string): string | 
 }
 
 async function postPreview(args: SendApplicationArgs, coverLetter: string): Promise<void> {
-  const response = await fetch("http://localhost:3000/preview", {
+  const response = await fetch(`${APPROVAL_UI_BASE_URL}/preview`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -240,10 +245,14 @@ async function postPreview(args: SendApplicationArgs, coverLetter: string): Prom
 }
 
 async function waitForDecision(): Promise<"approved" | "rejected"> {
+  const startedAt = Date.now();
   while (true) {
     if (approvalState.decision === "approved") return "approved";
     if (approvalState.decision === "rejected") return "rejected";
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (Date.now() - startedAt >= APPROVAL_DECISION_TIMEOUT_MS) {
+      throw new Error("Approval timeout");
+    }
+    await new Promise((resolve) => setTimeout(resolve, APPROVAL_DECISION_POLL_INTERVAL_MS));
   }
 }
 
@@ -381,9 +390,17 @@ async function runApplyMode(userMessage: string, messages: any[]): Promise<strin
   }
 
   await postPreview(sendArgs, coverLetter);
-  await open("http://localhost:3000");
+  await open(APPROVAL_UI_BASE_URL).catch(() => {
+    console.warn(`⚠️ Could not auto-open browser. Open manually: ${APPROVAL_UI_BASE_URL}`);
+  });
 
-  const decision = await waitForDecision();
+  let decision: "approved" | "rejected";
+  try {
+    decision = await waitForDecision();
+  } catch {
+    resetApprovalState();
+    return "⌛ Approval timed out. No email was sent.";
+  }
   if (decision !== "approved") {
     resetApprovalState();
     return "❌ Application cancelled by user";

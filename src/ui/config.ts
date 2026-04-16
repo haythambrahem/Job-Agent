@@ -1,0 +1,5 @@
+export const APPROVAL_UI_PORT = Number(process.env.APPROVAL_UI_PORT || 3000);
+export const APPROVAL_UI_BASE_URL = `http://localhost:${APPROVAL_UI_PORT}`;
+export const APPROVAL_DECISION_POLL_INTERVAL_MS = 500;
+export const APPROVAL_DECISION_TIMEOUT_MS = Number(process.env.APPROVAL_DECISION_TIMEOUT_MS || 30 * 60 * 1000);
+export const APPROVAL_PREVIEW_MAX_BODY_BYTES = Number(process.env.APPROVAL_PREVIEW_MAX_BODY_BYTES || 100 * 1024);
