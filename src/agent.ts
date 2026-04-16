@@ -101,7 +101,23 @@ type SendApplicationArgs = {
   company: string;
   job_title: string;
   cover_letter: string;
+  application?: {
+    status: "pending" | "approved" | "rejected";
+  };
 };
+
+type PendingApplication = {
+  job: {
+    title: string;
+    company: string;
+    email: string;
+  };
+  coverLetter: string;
+  status: "pending" | "approved" | "rejected";
+};
+
+let pendingApplication: PendingApplication | null = null;
+let cliReadline: readline.Interface | null = null;
 
 const REQUIRED_ARGS: Record<string, string[]> = {
   search_jobs: ["keywords"],
@@ -214,6 +230,16 @@ function getIntentBlockedToolReason(intent: Intent, toolName: string): string | 
     return "Invalid tool selection: apply intent only allows apply pipeline tools";
   }
   return null;
+}
+
+async function askForApproval(message: string): Promise<boolean> {
+  console.log(message);
+
+  const askWith = (rl: readline.Interface): Promise<string> =>
+    new Promise((resolve) => rl.question("Do you want to send this application? (yes/no) ", resolve));
+
+  const answer = (cliReadline ? await askWith(cliReadline) : "").trim().toLowerCase();
+  return ["yes", "approve", "approved", "send"].includes(answer);
 }
 
 async function requestForcedToolCall(
@@ -349,14 +375,52 @@ async function runApplyMode(userMessage: string, messages: any[]): Promise<strin
     return `INVALID_TOOL_ARGS: ${sendValidation.reason}`;
   }
 
+  pendingApplication = {
+    job: {
+      title: sendArgs.job_title,
+      company: sendArgs.company,
+      email: sendArgs.to_email
+    },
+    coverLetter,
+    status: "pending"
+  };
+
+  const reviewScreen = [
+    "====================================",
+    "📩 APPLICATION REVIEW",
+    "====================================",
+    `Company: ${pendingApplication.job.company}`,
+    `Position: ${pendingApplication.job.title}`,
+    `Email: ${pendingApplication.job.email}`,
+    "",
+    "📄 Cover Letter:",
+    "",
+    pendingApplication.coverLetter,
+    ""
+  ].join("\n");
+
+  const approved = await askForApproval(reviewScreen);
+  if (!approved) {
+    pendingApplication.status = "rejected";
+    pendingApplication = null;
+    return "❌ Application cancelled by user";
+  }
+
+  pendingApplication.status = "approved";
+  sendArgs.application = { status: pendingApplication.status };
+
   const sendResult = await runTool("send_application", sendArgs);
   console.log(`   ✅ ${sendResult.substring(0, 80)}`);
+  if (sendResult.startsWith("Échec outil send_application")) {
+    pendingApplication = null;
+    return sendResult;
+  }
   messages.push({ role: "tool", tool_call_id: sendStep.call.id, content: sendResult });
 
   const saveArgs = {
-    to_email: sendArgs.to_email,
-    company: sendArgs.company,
-    job_title: sendArgs.job_title
+    to_email: pendingApplication.job.email,
+    company: pendingApplication.job.company,
+    job_title: pendingApplication.job.title
   };
   const saveValidation = validateToolArgs("save_candidature", saveArgs);
   if (!saveValidation.valid) {
@@ -366,6 +430,7 @@ async function runApplyMode(userMessage: string, messages: any[]): Promise<strin
 
   const saveResult = await runTool("save_candidature", saveArgs);
   console.log(`   ✅ ${saveResult.substring(0, 80)}`);
+  pendingApplication = null;
   return `✅ Candidature envoyée chez ${String(sendArgs.company ?? "entreprise")}`;
 }
 
@@ -428,6 +493,7 @@ async function main() {
   console.log('   "Montre moi mes candidatures"\n');
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  cliReadline = rl;
   const history: any[] = [];
 
   const ask = () => {

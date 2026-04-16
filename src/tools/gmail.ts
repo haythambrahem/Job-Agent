@@ -22,6 +22,10 @@ export async function getAuth() {
 }
 
 export async function sendApplicationEmail(args: any): Promise<string> {
+  if (args?.application?.status !== "approved") {
+    throw new Error("Email blocked: application not approved by user");
+  }
+
   const auth = await getAuth();
   const gmail = google.gmail({ version: "v1", auth });
 
