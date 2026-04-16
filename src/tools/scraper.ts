@@ -29,7 +29,7 @@ function normalize(value: string): string {
 }
 
 function extractEmail(text: string): string | undefined {
-  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  const match = text.match(/[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}/);
   return match?.[0];
 }
 
@@ -122,8 +122,7 @@ async function scrapeTanitJobs(browser: Browser, args: ScraperArgs): Promise<Scr
           const company =
             card.querySelector(".company, .job-company, .listing-company, .media-body .small")?.textContent?.trim() ?? "";
           const location =
-            card.querySelector(".location, .job-location, .listing-location, .fa-map-marker")?.parentElement?.textContent?.trim() ??
-            "";
+            card.querySelector(".location, .job-location, .listing-location, [class*='location']")?.textContent?.trim() ?? "";
           const description =
             card.querySelector(".description, .job-description, .listing-description, p")?.textContent?.trim() ?? "";
           const applyUrl =
@@ -140,7 +139,7 @@ async function scrapeTanitJobs(browser: Browser, args: ScraperArgs): Promise<Scr
       company: normalize(job.company || DEFAULT_COMPANY),
       description: normalize(job.description),
       applyUrl: job.applyUrl,
-      email: extractEmail(`${job.description} ${job.company}`),
+      email: extractEmail(job.description),
       source: "tanitjobs" as const,
       location: normalize(job.location || args.location || DEFAULT_TUNISIA_LOCATION),
     }));
