@@ -20,6 +20,9 @@ export interface ScraperArgs {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_LIMIT_PER_SOURCE = 10;
+const DEFAULT_LOCATION = "Non spécifiée";
+const DEFAULT_TUNISIA_LOCATION = "Tunisie";
+const DEFAULT_COMPANY = "Entreprise non précisée";
 
 function normalize(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -35,7 +38,9 @@ function deduplicateJobs(jobs: ScrapedJob[]): ScrapedJob[] {
   const unique: ScrapedJob[] = [];
 
   for (const job of jobs) {
-    const key = `${normalize(job.title).toLowerCase()}::${normalize(job.company).toLowerCase()}`;
+    const normalizedTitle = normalize(job.title).toLowerCase();
+    const normalizedCompany = normalize(job.company).toLowerCase();
+    const key = `${normalizedTitle}::${normalizedCompany}`;
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(job);
@@ -85,7 +90,7 @@ async function scrapeLinkedIn(browser: Browser, args: ScraperArgs): Promise<Scra
       applyUrl: job.applyUrl,
       email: extractEmail(job.description),
       source: "linkedin" as const,
-      location: normalize(job.location || args.location || "Non spécifiée"),
+      location: normalize(job.location || args.location || DEFAULT_LOCATION),
     }));
   } catch (error) {
     console.warn("⚠️ LinkedIn scraping failed:", error instanceof Error ? error.message : String(error));
@@ -132,12 +137,12 @@ async function scrapeTanitJobs(browser: Browser, args: ScraperArgs): Promise<Scr
 
     return rawJobs.map((job) => ({
       title: normalize(job.title),
-      company: normalize(job.company || "Entreprise non précisée"),
+      company: normalize(job.company || DEFAULT_COMPANY),
       description: normalize(job.description),
       applyUrl: job.applyUrl,
       email: extractEmail(`${job.description} ${job.company}`),
       source: "tanitjobs" as const,
-      location: normalize(job.location || args.location || "Tunisie"),
+      location: normalize(job.location || args.location || DEFAULT_TUNISIA_LOCATION),
     }));
   } catch (error) {
     console.warn("⚠️ TanitJobs scraping failed:", error instanceof Error ? error.message : String(error));
@@ -193,7 +198,7 @@ async function scrapeIndeed(browser: Browser, args: ScraperArgs): Promise<Scrape
       applyUrl: job.applyUrl,
       email: extractEmail(job.description),
       source: "indeed" as const,
-      location: normalize(job.location || args.location || "Non spécifiée"),
+      location: normalize(job.location || args.location || DEFAULT_LOCATION),
     }));
   } catch (error) {
     console.warn("⚠️ Indeed scraping failed:", error instanceof Error ? error.message : String(error));
