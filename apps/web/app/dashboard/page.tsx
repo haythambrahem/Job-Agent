@@ -17,7 +17,7 @@ export default async function DashboardPage() {
       headers: {
         cookie: (await cookies()).toString()
       }
-    } as any,
+    } as unknown as Parameters<typeof getToken>[0]["req"],
     secret: process.env.NEXTAUTH_SECRET,
     raw: true
   });

@@ -2,6 +2,13 @@ import type { NextFunction, Request, Response } from "express";
 import { decode } from "next-auth/jwt";
 import type { JWT } from "next-auth/jwt";
 
+const VALID_PLANS = ["free", "pro", "premium"] as const;
+type ValidPlan = (typeof VALID_PLANS)[number];
+
+function isValidPlan(value: unknown): value is ValidPlan {
+  return typeof value === "string" && VALID_PLANS.includes(value as ValidPlan);
+}
+
 export async function authenticateRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authorization = req.headers.authorization;
@@ -25,7 +32,7 @@ export async function authenticateRequest(req: Request, res: Response, next: Nex
     const email = typeof decoded?.email === "string" ? decoded.email : undefined;
     const plan = decoded?.plan;
 
-    if (!userId || !email || (plan !== "free" && plan !== "pro" && plan !== "premium")) {
+    if (!userId || !email || !isValidPlan(plan)) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
