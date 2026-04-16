@@ -140,10 +140,7 @@ const store = {
     return prisma.application.findFirst({ where: { id, userId } }) as unknown as Promise<Application | null>;
   },
   async updateApplicationStatus(userId: string, id: string, status: "pending" | "approved" | "rejected" | "sent"): Promise<Application> {
-    const existing = await prisma.application.findFirst({ where: { id, userId } });
-    if (!existing) throw new Error("Application not found");
-    await prisma.application.updateMany({ where: { id, userId }, data: { status } });
-    return prisma.application.findFirstOrThrow({ where: { id, userId } }) as unknown as Promise<Application>;
+    return prisma.application.update({ where: { id_userId: { id, userId } }, data: { status } }) as unknown as Promise<Application>;
   },
   async createAIRun(userId: string, input: { type: string; status: string }): Promise<void> {
     await prisma.aIRun.create({ data: { userId, type: input.type, status: input.status } });
@@ -372,8 +369,10 @@ app.post("/applications/:id/reject", async (req, res) => {
       return;
     }
 
-    await prisma.application.updateMany({ where: { id: req.params.id, userId }, data: { status: "rejected" } });
-    const updated = await prisma.application.findFirstOrThrow({ where: { id: req.params.id, userId } });
+    const updated = await prisma.application.update({
+      where: { id_userId: { id: req.params.id, userId } },
+      data: { status: "rejected" }
+    });
     res.json(updated);
   } catch (error: any) {
     res.status(400).json({ error: error?.message || "rejection failed" });
