@@ -338,7 +338,7 @@ async function runApplyMode(userMessage: string, messages: any[]): Promise<strin
 
   const parsedSend = parseAndValidateCall(sendStep.call, userMessage, "apply");
   if (!parsedSend.ok) return parsedSend.error;
-  const sendArgs = { ...parsedSend.args, cover_letter: coverLetter };
+  const sendArgs: Record<string, any> = { ...parsedSend.args, cover_letter: coverLetter };
   const sendValidation = validateToolArgs("send_application", sendArgs);
   if (!sendValidation.valid) {
     logToolDebug(userMessage, "apply", "send_application", { args: sendArgs, error: sendValidation.reason });
@@ -350,9 +350,9 @@ async function runApplyMode(userMessage: string, messages: any[]): Promise<strin
   messages.push({ role: "tool", tool_call_id: sendStep.call.id, content: sendResult });
 
   const saveArgs = {
-    to_email: sendArgs.to_email,
-    company: sendArgs.company,
-    job_title: sendArgs.job_title
+    to_email: String(sendArgs.to_email ?? ""),
+    company: String(sendArgs.company ?? ""),
+    job_title: String(sendArgs.job_title ?? "")
   };
   const saveValidation = validateToolArgs("save_candidature", saveArgs);
   if (!saveValidation.valid) {
@@ -362,7 +362,7 @@ async function runApplyMode(userMessage: string, messages: any[]): Promise<strin
 
   const saveResult = await runTool("save_candidature", saveArgs);
   console.log(`   ✅ ${saveResult.substring(0, 80)}`);
-  return `✅ Candidature envoyée chez ${sendArgs.company}`;
+  return `✅ Candidature envoyée chez ${String(sendArgs.company ?? "entreprise")}`;
 }
 
 async function runTool(name: string, args: any): Promise<string> {
