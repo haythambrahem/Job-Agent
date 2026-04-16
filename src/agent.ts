@@ -89,6 +89,36 @@ const tools = [
 
 type Intent = "search" | "apply" | "history" | "unknown";
 
+type ToolName =
+  | "search_jobs"
+  | "generate_cover_letter"
+  | "send_application"
+  | "save_candidature"
+  | "get_candidatures";
+
+type SendApplicationArgs = {
+  to_email: string;
+  company: string;
+  job_title: string;
+  cover_letter: string;
+  application?: {
+    status: "pending" | "approved" | "rejected";
+  };
+};
+
+type PendingApplication = {
+  job: {
+    title: string;
+    company: string;
+    email: string;
+  };
+  coverLetter: string;
+  status: "pending" | "approved" | "rejected";
+};
+
+let pendingApplication: PendingApplication | null = null;
+let cliReadline: readline.Interface | null = null;
+
 const REQUIRED_ARGS: Record<string, string[]> = {
   search_jobs: ["keywords"],
   generate_cover_letter: ["job_title", "company", "job_description"],
@@ -110,50 +140,37 @@ function detectIntent(message: string): Intent {
   const hasWord = (pattern: string): boolean => new RegExp(`\\b${pattern}\\b`, "i").test(text);
 
   if (
-    hasWord("envoie") ||
+    text.includes("mes candidatures") ||
+    hasWord("history") ||
+    hasWord("historique") ||
+    hasWord("applications") ||
+    hasWord("application")
+  ) {
+    return "history";
+  }
+
+  if (
     hasWord("postule") ||
     hasWord("postuler") ||
-    text.includes("candidature à envoyer") ||
-    text.includes("candidature a envoyer")
+    hasWord("apply") ||
+    text.includes("send application") ||
+    text.includes("envoie ma candidature")
   ) {
     return "apply";
   }
 
   if (
     hasWord("cherche") ||
-    hasWord("trouve") ||
+    text.includes("find jobs") ||
     hasWord("offres") ||
-    hasWord("offre")
+    hasWord("offre") ||
+    text.includes("tanitjobs") ||
+    text.includes("matching cv")
   ) {
     return "search";
   }
 
-  const hasHistoryNoun =
-    hasWord("candidature") ||
-    hasWord("candidatures") ||
-    hasWord("application") ||
-    hasWord("applications");
-  const hasHistoryContext =
-    text.includes("mes candidatures") ||
-    hasWord("historique") ||
-    hasWord("history") ||
-    hasWord("montre") ||
-    hasWord("voir") ||
-    hasWord("liste");
-
-  if (hasHistoryNoun || hasHistoryContext) {
-    return "history";
-  }
-
   return "unknown";
-}
-
-function getForcedTool(intent: Intent, step: number): string | null {
-  if (intent === "history") return "get_candidatures";
-  if (step > 0) return null;
-  if (intent === "search") return "search_jobs";
-  if (intent === "apply") return "generate_cover_letter";
-  return null;
 }
 
 function parseToolArgs(rawArgs: string): { ok: true; value: Record<string, any> } | { ok: false; error: string } {
@@ -203,10 +220,218 @@ function logToolDebug(userMessage: string, intent: Intent, selectedTool: string 
 }
 
 function getIntentBlockedToolReason(intent: Intent, toolName: string): string | null {
-  if (intent === "history" && toolName === "search_jobs") {
-    return "search_jobs interdit pour une demande d'historique. Utilise get_candidatures.";
+  if (intent === "search" && toolName !== "search_jobs") {
+    return "Invalid tool selection: search intent cannot trigger apply tools";
+  }
+  if (intent === "history" && toolName !== "get_candidatures") {
+    return "Invalid tool selection: history intent only allows get_candidatures";
+  }
+  if (intent === "apply" && !["generate_cover_letter", "send_application", "save_candidature"].includes(toolName)) {
+    return "Invalid tool selection: apply intent only allows apply pipeline tools";
   }
   return null;
+}
+
+async function askForApproval(message: string): Promise<boolean> {
+  console.log(message);
+
+  const askWith = (rl: readline.Interface): Promise<string> =>
+    new Promise((resolve) => rl.question("Do you want to send this application? (yes/no) ", resolve));
+
+  const answer = (cliReadline ? await askWith(cliReadline) : "").trim().toLowerCase();
+  return ["yes", "approve", "approved", "send"].includes(answer);
+}
+
+async function requestForcedToolCall(
+  messages: any[],
+  userMessage: string,
+  intent: Intent,
+  forcedTool: ToolName
+): Promise<{ ok: true; choiceMessage: any; call: any } | { ok: false; error: string }> {
+  let toolUseFailedRetryAttempted = false;
+
+  while (true) {
+    let response: any;
+    try {
+      response = await groq.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages,
+        tools,
+        tool_choice: {
+          type: "function",
+          function: { name: forcedTool }
+        },
+        max_tokens: 2000
+      });
+    } catch (err: any) {
+      logToolDebug(userMessage, intent, forcedTool, err?.error ?? err);
+      if (isToolUseFailedError(err) && !toolUseFailedRetryAttempted) {
+        toolUseFailedRetryAttempted = true;
+        const requiredArgs = REQUIRED_ARGS[forcedTool].join(", ") || "none";
+        messages.push({
+          role: "system",
+          content: `Retry after tool_use_failed. Intent=${intent}. You must call only ${forcedTool} with a valid JSON object. Required arguments: ${requiredArgs}. Return exactly one tool call.`
+        });
+        continue;
+      }
+      return { ok: false, error: "❌ Erreur Groq lors de l'appel outil. Vérifie les champs requis puis réessaie." };
+    }
+
+    const choice = response.choices[0];
+    if (choice.finish_reason !== "tool_calls" || !choice.message.tool_calls?.length) {
+      logToolDebug(userMessage, intent, forcedTool, { reason: "missing_tool_call", choice });
+      return { ok: false, error: choice.message.content || "Je n'ai pas trouvé d'action à effectuer." };
+    }
+
+    const call = choice.message.tool_calls[0];
+    if (call.function.name !== forcedTool) {
+      logToolDebug(userMessage, intent, call.function.name, {
+        reason: `forced tool mismatch, expected ${forcedTool}`,
+        arguments: call.function.arguments
+      });
+      return { ok: false, error: `❌ Outil inattendu reçu (${call.function.name}). Outil attendu: ${forcedTool}.` };
+    }
+
+    return { ok: true, choiceMessage: choice.message, call };
+  }
+}
+
+function parseAndValidateCall(
+  call: any,
+  userMessage: string,
+  intent: Intent
+): { ok: true; name: ToolName; args: Record<string, any> } | { ok: false; error: string } {
+  const toolName = call.function.name as ToolName;
+  const blockedReason = getIntentBlockedToolReason(intent, toolName);
+  if (blockedReason) {
+    console.error(blockedReason);
+    logToolDebug(userMessage, intent, toolName, { reason: blockedReason, arguments: call.function.arguments });
+    return { ok: false, error: `TOOL_BLOCKED: ${blockedReason}` };
+  }
+
+  const parsed = parseToolArgs(call.function.arguments);
+  if (!parsed.ok) {
+    logToolDebug(userMessage, intent, toolName, { arguments: call.function.arguments, error: parsed.error });
+    return { ok: false, error: `INVALID_TOOL_ARGS: ${parsed.error}` };
+  }
+
+  const validation = validateToolArgs(toolName, parsed.value);
+  if (!validation.valid) {
+    logToolDebug(userMessage, intent, toolName, { args: parsed.value, error: validation.reason });
+    return { ok: false, error: `INVALID_TOOL_ARGS: ${validation.reason}` };
+  }
+
+  return { ok: true, name: toolName, args: parsed.value };
+}
+
+async function runSearchMode(userMessage: string, messages: any[]): Promise<string> {
+  const forced = await requestForcedToolCall(messages, userMessage, "search", "search_jobs");
+  if (!forced.ok) return forced.error;
+
+  messages.push(forced.choiceMessage);
+  const parsed = parseAndValidateCall(forced.call, userMessage, "search");
+  if (!parsed.ok) return parsed.error;
+
+  const result = await runTool(parsed.name, parsed.args);
+  console.log(`   ✅ ${result.substring(0, 80)}`);
+  return result;
+}
+
+async function runHistoryMode(userMessage: string, messages: any[]): Promise<string> {
+  const forced = await requestForcedToolCall(messages, userMessage, "history", "get_candidatures");
+  if (!forced.ok) return forced.error;
+
+  messages.push(forced.choiceMessage);
+  const parsed = parseAndValidateCall(forced.call, userMessage, "history");
+  if (!parsed.ok) return parsed.error;
+
+  const result = await runTool(parsed.name, parsed.args);
+  console.log(`   ✅ ${result.substring(0, 80)}`);
+  return result;
+}
+
+async function runApplyMode(userMessage: string, messages: any[]): Promise<string> {
+  const coverStep = await requestForcedToolCall(messages, userMessage, "apply", "generate_cover_letter");
+  if (!coverStep.ok) return coverStep.error;
+  messages.push(coverStep.choiceMessage);
+
+  const parsedCover = parseAndValidateCall(coverStep.call, userMessage, "apply");
+  if (!parsedCover.ok) return parsedCover.error;
+
+  const coverLetter = await runTool(parsedCover.name, parsedCover.args);
+  console.log(`   ✅ ${coverLetter.substring(0, 80)}`);
+  messages.push({ role: "tool", tool_call_id: coverStep.call.id, content: coverLetter });
+
+  const sendStep = await requestForcedToolCall(messages, userMessage, "apply", "send_application");
+  if (!sendStep.ok) return sendStep.error;
+  messages.push(sendStep.choiceMessage);
+
+  const parsedSend = parseAndValidateCall(sendStep.call, userMessage, "apply");
+  if (!parsedSend.ok) return parsedSend.error;
+  const sendArgs: SendApplicationArgs = { ...parsedSend.args, cover_letter: coverLetter } as SendApplicationArgs;
+  const sendValidation = validateToolArgs("send_application", sendArgs);
+  if (!sendValidation.valid) {
+    logToolDebug(userMessage, "apply", "send_application", { args: sendArgs, error: sendValidation.reason });
+    return `INVALID_TOOL_ARGS: ${sendValidation.reason}`;
+  }
+
+  pendingApplication = {
+    job: {
+      title: sendArgs.job_title,
+      company: sendArgs.company,
+      email: sendArgs.to_email
+    },
+    coverLetter,
+    status: "pending"
+  };
+
+  const reviewScreen = [
+    "====================================",
+    "📩 APPLICATION REVIEW",
+    "====================================",
+    `Company: ${pendingApplication.job.company}`,
+    `Position: ${pendingApplication.job.title}`,
+    `Email: ${pendingApplication.job.email}`,
+    "",
+    "📄 Cover Letter:",
+    "",
+    pendingApplication.coverLetter,
+    ""
+  ].join("\n");
+
+  const approved = await askForApproval(reviewScreen);
+  if (!approved) {
+    pendingApplication.status = "rejected";
+    pendingApplication = null;
+    return "❌ Application cancelled by user";
+  }
+
+  pendingApplication.status = "approved";
+  sendArgs.application = { status: pendingApplication.status };
+
+  const sendResult = await runTool("send_application", sendArgs);
+  console.log(`   ✅ ${sendResult.substring(0, 80)}`);
+  if (sendResult.startsWith("Échec outil send_application")) {
+    pendingApplication = null;
+    return sendResult;
+  }
+  messages.push({ role: "tool", tool_call_id: sendStep.call.id, content: sendResult });
+
+  const saveArgs = {
+    to_email: pendingApplication.job.email,
+    company: pendingApplication.job.company,
+    job_title: pendingApplication.job.title
+  };
+  const saveValidation = validateToolArgs("save_candidature", saveArgs);
+  if (!saveValidation.valid) {
+    logToolDebug(userMessage, "apply", "save_candidature", { args: saveArgs, error: saveValidation.reason });
+    return `INVALID_TOOL_ARGS: ${saveValidation.reason}`;
+  }
+
+  const saveResult = await runTool("save_candidature", saveArgs);
+  console.log(`   ✅ ${saveResult.substring(0, 80)}`);
+  pendingApplication = null;
+  return `✅ Candidature envoyée chez ${String(sendArgs.company ?? "entreprise")}`;
 }
 
 async function runTool(name: string, args: any): Promise<string> {
@@ -246,94 +471,16 @@ async function chat(userMessage: string, history: any[]): Promise<string> {
     { role: "user", content: userMessage }
   ];
 
-  let hasRetriedToolUseFailed = false;
-
-  for (let step = 0; step < 15; step++) {
-    const forcedTool = getForcedTool(intent, step);
-    const selectedToolForRequest = forcedTool ?? "auto";
-    let response: any;
-
-    try {
-      response = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-        messages,
-        tools,
-        tool_choice: forcedTool
-          ? {
-              type: "function",
-              function: { name: forcedTool }
-            }
-          : "auto",
-        max_tokens: 2000
-      });
-    } catch (err: any) {
-      logToolDebug(userMessage, intent, selectedToolForRequest, err?.error ?? err);
-      if (isToolUseFailedError(err) && !hasRetriedToolUseFailed) {
-        hasRetriedToolUseFailed = true;
-        messages.push({
-          role: "system",
-          content: `Contexte corrigé: intention détectée = ${intent}. Pour historique utilise seulement get_candidatures; pour recherche utilise search_jobs; pour candidature respecte la séquence generate_cover_letter puis send_application puis save_candidature.`
-        });
-        continue;
-      }
-      return "❌ Je n'ai pas pu traiter la demande maintenant. Réessaie avec plus de détails.";
-    }
-
-    const choice = response.choices[0];
-    if (choice.finish_reason !== "tool_calls" || !choice.message.tool_calls) {
-      return choice.message.content || "Je n'ai pas trouvé d'action à effectuer.";
-    }
-
-    messages.push(choice.message);
-
-    for (const call of choice.message.tool_calls) {
-      let toolName = call.function.name;
-      let args: Record<string, any> = {};
-
-      const blockedReason = getIntentBlockedToolReason(intent, toolName);
-      if (blockedReason) {
-        const blockReason = `TOOL_BLOCKED: ${blockedReason}`;
-        console.warn(`⚠️ ${blockReason}`);
-        logToolDebug(userMessage, intent, toolName, { reason: blockReason, arguments: call.function.arguments });
-        messages.push({ role: "tool", tool_call_id: call.id, content: blockReason });
-        messages.push({
-          role: "system",
-          content: "Correction: applique strictement le routage par intention et appelle l'outil approprié avec un schéma valide."
-        });
-        continue;
-      } else {
-        const parsed = parseToolArgs(call.function.arguments);
-        if (!parsed.ok) {
-          logToolDebug(userMessage, intent, call.function.name, { arguments: call.function.arguments, error: parsed.error });
-          messages.push({
-            role: "tool",
-            tool_call_id: call.id,
-            content: `INVALID_TOOL_ARGS: ${parsed.error}. Réessaie avec un JSON objet valide.`
-          });
-          continue;
-        }
-        args = parsed.value;
-      }
-
-      const validation = validateToolArgs(toolName, args);
-      if (!validation.valid) {
-        logToolDebug(userMessage, intent, toolName, { args, error: validation.reason });
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          content: `INVALID_TOOL_ARGS: ${validation.reason}. Corrige les paramètres et réessaie.`
-        });
-        continue;
-      }
-
-      const result = await runTool(toolName, args);
-      console.log(`   ✅ ${result.substring(0, 80)}`);
-      messages.push({ role: "tool", tool_call_id: call.id, content: result });
-      // Pause pour éviter le rate limit Groq
-      await new Promise(r => setTimeout(r, 1500));
-    }
+  if (intent === "search") {
+    return runSearchMode(userMessage, messages);
   }
-  return "Tâche terminée.";
+  if (intent === "apply") {
+    return runApplyMode(userMessage, messages);
+  }
+  if (intent === "history") {
+    return runHistoryMode(userMessage, messages);
+  }
+  return "Intention non reconnue. Utilise par exemple: 'find jobs matching my CV', 'apply to this job', ou 'show my applications'.";
 }
 
 async function main() {
@@ -346,6 +493,7 @@ async function main() {
   console.log('   "Montre moi mes candidatures"\n');
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  cliReadline = rl;
   const history: any[] = [];
 
   const ask = () => {
