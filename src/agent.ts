@@ -236,7 +236,7 @@ async function requestForcedToolCall(
         hasRetriedToolUseFailed = true;
         messages.push({
           role: "system",
-          content: `Retry after tool_use_failed. user="${userMessage}", intent="${intent}", forced_tool="${forcedTool}". Return exactly one valid tool call with complete JSON object arguments.`
+          content: `Retry after tool_use_failed. intent="${intent}", forced_tool="${forcedTool}". Return exactly one valid tool call with complete JSON object arguments.`
         });
         continue;
       }
@@ -328,10 +328,6 @@ async function runApplyMode(userMessage: string, messages: any[]): Promise<strin
   console.log(`   ✅ ${coverLetter.substring(0, 80)}`);
   messages.push({ role: "tool", tool_call_id: coverStep.call.id, content: coverLetter });
 
-  messages.push({
-    role: "system",
-    content: "Step 2/3 APPLY MODE: call send_application with complete args. Use the EXACT previous tool output as cover_letter."
-  });
   const sendStep = await requestForcedToolCall(messages, userMessage, "apply", "send_application");
   if (!sendStep.ok) return sendStep.error;
   messages.push(sendStep.choiceMessage);
