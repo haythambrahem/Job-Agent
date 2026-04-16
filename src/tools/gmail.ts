@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import fs from "fs";
 import readline from "readline";
+import { approvalState } from "../state/approvalState.js";
 
 export async function getAuth() {
   const creds = JSON.parse(fs.readFileSync("credentials.json", "utf8"));
@@ -22,7 +23,7 @@ export async function getAuth() {
 }
 
 export async function sendApplicationEmail(args: any): Promise<string> {
-  if (args?.application?.status !== "approved") {
+  if (!approvalState.isApproved) {
     throw new Error("Email blocked: application not approved by user");
   }
 
