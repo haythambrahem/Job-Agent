@@ -1,169 +1,227 @@
-import { chromium } from "playwright";
+import { chromium, type Browser } from "playwright";
 
-export interface Job {
+export type JobSource = "linkedin" | "tanitjobs" | "indeed";
+
+export interface ScrapedJob {
   title: string;
   company: string;
   description: string;
-  email?: string;
   applyUrl: string;
-  source: "LinkedIn" | "TanitJobs" | "Indeed";
+  email?: string;
+  source: JobSource;
   location: string;
 }
 
-// Deduplicate jobs by title + company
-function deduplicateJobs(jobs: Job[]): Job[] {
+export interface ScraperArgs {
+  keywords: string;
+  location?: string;
+  limitPerSource?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_LIMIT_PER_SOURCE = 10;
+
+function normalize(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function extractEmail(text: string): string | undefined {
+  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match?.[0];
+}
+
+function deduplicateJobs(jobs: ScrapedJob[]): ScrapedJob[] {
   const seen = new Set<string>();
-  return jobs.filter(job => {
-    const key = `${job.title}|${job.company}`;
-    if (seen.has(key)) return false;
+  const unique: ScrapedJob[] = [];
+
+  for (const job of jobs) {
+    const key = `${normalize(job.title).toLowerCase()}::${normalize(job.company).toLowerCase()}`;
+    if (seen.has(key)) continue;
     seen.add(key);
-    return true;
-  });
+    unique.push(job);
+  }
+
+  return unique;
 }
 
-export async function scraperLinkedIn(keywords: string, location: string): Promise<Job[]> {
-  const jobs: Job[] = [];
+async function scrapeLinkedIn(browser: Browser, args: ScraperArgs): Promise<ScrapedJob[]> {
+  const page = await browser.newPage();
+
+  try {
+    const query = encodeURIComponent(args.keywords);
+    const location = encodeURIComponent(args.location ?? "");
+    const url = `https://www.linkedin.com/jobs/search/?keywords=${query}&location=${location}`;
+
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: DEFAULT_TIMEOUT_MS });
+    await page.waitForSelector(".job-search-card, .base-card", { timeout: DEFAULT_TIMEOUT_MS }).catch(() => {});
+
+    const rawJobs = await page.evaluate((limit) => {
+      const cards = Array.from(
+        document.querySelectorAll(".job-search-card, .base-card, li")
+      ).slice(0, limit);
+
+      return cards
+        .map((card) => {
+          const title =
+            card.querySelector(".base-search-card__title, .base-search-card__title span, h3")?.textContent?.trim() ?? "";
+          const company =
+            card.querySelector(".base-search-card__subtitle, h4, .job-search-card__subtitle")?.textContent?.trim() ?? "";
+          const location =
+            card.querySelector(".job-search-card__location, .job-search-card__location span")?.textContent?.trim() ?? "";
+          const description =
+            card.querySelector(".job-search-card__snippet, .job-search-card__snippet-text, p")?.textContent?.trim() ?? "";
+          const applyUrl =
+            (card.querySelector("a.base-card__full-link, a") as HTMLAnchorElement | null)?.href?.trim() ?? "";
+
+          return { title, company, location, description, applyUrl };
+        })
+        .filter((job) => job.title && job.company && job.applyUrl);
+    }, args.limitPerSource ?? DEFAULT_LIMIT_PER_SOURCE);
+
+    return rawJobs.map((job) => ({
+      title: normalize(job.title),
+      company: normalize(job.company),
+      description: normalize(job.description),
+      applyUrl: job.applyUrl,
+      email: extractEmail(job.description),
+      source: "linkedin" as const,
+      location: normalize(job.location || args.location || "Non spécifiée"),
+    }));
+  } catch (error) {
+    console.warn("⚠️ LinkedIn scraping failed:", error instanceof Error ? error.message : String(error));
+    return [];
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+async function scrapeTanitJobs(browser: Browser, args: ScraperArgs): Promise<ScrapedJob[]> {
+  const page = await browser.newPage();
+
+  try {
+    const query = encodeURIComponent(args.keywords);
+    const url = `https://www.tanitjobs.com/jobs/?q=${query}`;
+
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: DEFAULT_TIMEOUT_MS });
+    await page.waitForSelector("article, .job-item, .search-results li", { timeout: DEFAULT_TIMEOUT_MS }).catch(() => {});
+
+    const rawJobs = await page.evaluate((limit) => {
+      const cards = Array.from(
+        document.querySelectorAll("article, .job-item, .search-results li, .media")
+      ).slice(0, limit);
+
+      return cards
+        .map((card) => {
+          const title =
+            card.querySelector("h2 a, h3 a, .job-title a, .media-heading a, a")?.textContent?.trim() ?? "";
+          const company =
+            card.querySelector(".company, .job-company, .listing-company, .media-body .small")?.textContent?.trim() ?? "";
+          const location =
+            card.querySelector(".location, .job-location, .listing-location, .fa-map-marker")?.parentElement?.textContent?.trim() ??
+            "";
+          const description =
+            card.querySelector(".description, .job-description, .listing-description, p")?.textContent?.trim() ?? "";
+          const applyUrl =
+            (card.querySelector("h2 a, h3 a, .job-title a, .media-heading a, a") as HTMLAnchorElement | null)?.href?.trim() ??
+            "";
+
+          return { title, company, location, description, applyUrl };
+        })
+        .filter((job) => job.title && job.applyUrl);
+    }, args.limitPerSource ?? DEFAULT_LIMIT_PER_SOURCE);
+
+    return rawJobs.map((job) => ({
+      title: normalize(job.title),
+      company: normalize(job.company || "Entreprise non précisée"),
+      description: normalize(job.description),
+      applyUrl: job.applyUrl,
+      email: extractEmail(`${job.description} ${job.company}`),
+      source: "tanitjobs" as const,
+      location: normalize(job.location || args.location || "Tunisie"),
+    }));
+  } catch (error) {
+    console.warn("⚠️ TanitJobs scraping failed:", error instanceof Error ? error.message : String(error));
+    return [];
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+async function scrapeIndeed(browser: Browser, args: ScraperArgs): Promise<ScrapedJob[]> {
+  const page = await browser.newPage();
+
+  try {
+    const query = encodeURIComponent(args.keywords);
+    const location = encodeURIComponent(args.location ?? "");
+    const url = `https://fr.indeed.com/jobs?q=${query}&l=${location}`;
+
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: DEFAULT_TIMEOUT_MS });
+    await page.waitForSelector(".job_seen_beacon, .result, [data-testid='slider_item']", {
+      timeout: DEFAULT_TIMEOUT_MS,
+    }).catch(() => {});
+
+    const rawJobs = await page.evaluate((limit) => {
+      const cards = Array.from(
+        document.querySelectorAll(".job_seen_beacon, .result, [data-testid='slider_item']")
+      ).slice(0, limit);
+
+      return cards
+        .map((card) => {
+          const title =
+            card.querySelector("h2 a span, h2 a, [data-testid='jobTitle']")?.textContent?.trim() ?? "";
+          const company =
+            card.querySelector("[data-testid='company-name'], .companyName")?.textContent?.trim() ?? "";
+          const location =
+            card.querySelector("[data-testid='text-location'], .companyLocation")?.textContent?.trim() ?? "";
+          const description =
+            card.querySelector(".job-snippet, [data-testid='job-snippet']")?.textContent?.trim() ?? "";
+          const linkNode =
+            (card.querySelector("h2 a") as HTMLAnchorElement | null) ??
+            (card.querySelector("a[data-jk]") as HTMLAnchorElement | null);
+          const href = linkNode?.getAttribute("href")?.trim() ?? "";
+          const applyUrl = href.startsWith("http") ? href : `https://fr.indeed.com${href}`;
+
+          return { title, company, location, description, applyUrl };
+        })
+        .filter((job) => job.title && job.company && job.applyUrl);
+    }, args.limitPerSource ?? DEFAULT_LIMIT_PER_SOURCE);
+
+    return rawJobs.map((job) => ({
+      title: normalize(job.title),
+      company: normalize(job.company),
+      description: normalize(job.description),
+      applyUrl: job.applyUrl,
+      email: extractEmail(job.description),
+      source: "indeed" as const,
+      location: normalize(job.location || args.location || "Non spécifiée"),
+    }));
+  } catch (error) {
+    console.warn("⚠️ Indeed scraping failed:", error instanceof Error ? error.message : String(error));
+    return [];
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+export async function scrapeJobs(args: ScraperArgs): Promise<ScrapedJob[]> {
+  if (!args.keywords || !args.keywords.trim()) {
+    return [];
+  }
+
   const browser = await chromium.launch({ headless: true });
 
   try {
-    const page = await browser.newPage();
-    const q = encodeURIComponent(keywords);
-    const loc = encodeURIComponent(location || "");
-    const url = `https://www.linkedin.com/jobs/search/?keywords=${q}&location=${loc}`;
-    
-    await page.goto(url, { waitUntil: "networkidle", timeout: 30000 }).catch(() => {});
-    await page.waitForSelector(".job-search-card", { timeout: 10000 }).catch(() => {});
+    const [linkedinJobs, tanitJobs, indeedJobs] = await Promise.all([
+      scrapeLinkedIn(browser, args),
+      scrapeTanitJobs(browser, args),
+      scrapeIndeed(browser, args),
+    ]);
 
-    const jobList = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll(".job-search-card")).slice(0, 10).map(card => ({
-        title: (card.querySelector(".base-search-card__title") as HTMLElement)?.innerText?.trim() || "",
-        company: (card.querySelector(".base-search-card__subtitle") as HTMLElement)?.innerText?.trim() || "",
-        location: (card.querySelector(".job-search-card__location") as HTMLElement)?.innerText?.trim() || "",
-        url: (card.querySelector("a") as HTMLAnchorElement)?.href || "",
-        description: (card.querySelector(".base-search-card__info") as HTMLElement)?.innerText?.trim() || ""
-      }));
-    });
-
-    for (const job of jobList) {
-      if (job.title && job.company) {
-        jobs.push({
-          title: job.title,
-          company: job.company,
-          description: job.description || job.title,
-          applyUrl: job.url || "",
-          source: "LinkedIn",
-          location: job.location
-        });
-      }
-    }
-  } catch (err: any) {
-    console.error("❌ LinkedIn scraper error:", err.message);
+    return deduplicateJobs([...linkedinJobs, ...tanitJobs, ...indeedJobs]);
+  } catch (error) {
+    console.warn("⚠️ Unified scraping failed:", error instanceof Error ? error.message : String(error));
+    return [];
   } finally {
-    await browser.close();
+    await browser.close().catch(() => {});
   }
-
-  return jobs;
-}
-
-export async function scraperTanitJobs(keywords: string): Promise<Job[]> {
-  const jobs: Job[] = [];
-  const browser = await chromium.launch({ headless: true });
-
-  try {
-    const page = await browser.newPage();
-    const q = encodeURIComponent(keywords);
-    const url = `https://www.tanitjobs.com/jobs/?q=${q}`;
-
-    await page.goto(url, { waitUntil: "networkidle", timeout: 30000 }).catch(() => {});
-    await page.waitForSelector("a[data-job-id]", { timeout: 10000 }).catch(() => {});
-
-    const jobList = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("a[data-job-id]")).slice(0, 10).map(card => ({
-        title: (card.querySelector(".job-title") as HTMLElement)?.innerText?.trim() || (card.textContent?.split("\n")[0] || ""),
-        company: (card.querySelector(".company-name") as HTMLElement)?.innerText?.trim() || (card.textContent?.split("\n")[1] || ""),
-        location: (card.querySelector(".job-location") as HTMLElement)?.innerText?.trim() || "",
-        url: (card as HTMLAnchorElement)?.href || "",
-        description: card.textContent?.trim() || ""
-      }));
-    });
-
-    for (const job of jobList) {
-      if (job.title && job.company) {
-        jobs.push({
-          title: job.title,
-          company: job.company,
-          description: job.description.substring(0, 200),
-          applyUrl: job.url || "",
-          source: "TanitJobs",
-          location: job.location
-        });
-      }
-    }
-  } catch (err: any) {
-    console.error("❌ TanitJobs scraper error:", err.message);
-  } finally {
-    await browser.close();
-  }
-
-  return jobs;
-}
-
-export async function scraperIndeed(keywords: string, location: string): Promise<Job[]> {
-  const jobs: Job[] = [];
-  const browser = await chromium.launch({ headless: true });
-
-  try {
-    const page = await browser.newPage();
-    const q = encodeURIComponent(keywords);
-    const loc = encodeURIComponent(location || "");
-    const url = `https://fr.indeed.com/jobs?q=${q}&l=${loc}`;
-
-    await page.goto(url, { waitUntil: "networkidle", timeout: 30000 }).catch(() => {});
-    await page.waitForSelector("a[data-jk]", { timeout: 10000 }).catch(() => {});
-
-    const jobList = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("a[data-jk]")).slice(0, 10).map(card => ({
-        title: (card.querySelector(".jcs-JobTitle") as HTMLElement)?.innerText?.trim() || "",
-        company: (card.querySelector(".companyName") as HTMLElement)?.innerText?.trim() || "",
-        location: (card.querySelector(".companyLocation") as HTMLElement)?.innerText?.trim() || "",
-        url: (card as HTMLAnchorElement)?.href || "",
-        description: (card.querySelector(".job-snippet") as HTMLElement)?.innerText?.trim() || ""
-      }));
-    });
-
-    for (const job of jobList) {
-      if (job.title && job.company) {
-        jobs.push({
-          title: job.title,
-          company: job.company,
-          description: job.description || job.title,
-          applyUrl: job.url || "",
-          source: "Indeed",
-          location: job.location
-        });
-      }
-    }
-  } catch (err: any) {
-    console.error("❌ Indeed scraper error:", err.message);
-  } finally {
-    await browser.close();
-  }
-
-  return jobs;
-}
-
-export async function scrapeAllSources(keywords: string, location: string): Promise<Job[]> {
-  console.log(`\n🕷️ Scraping for "${keywords}" in "${location}"...`);
-
-  const [linkedInJobs, tanitJobs, indeedJobs] = await Promise.all([
-    scraperLinkedIn(keywords, location),
-    scraperTanitJobs(keywords),
-    scraperIndeed(keywords, location)
-  ]);
-
-  const allJobs = [...linkedInJobs, ...tanitJobs, ...indeedJobs];
-  const deduped = deduplicateJobs(allJobs);
-
-  console.log(`✅ Found ${deduped.length} unique jobs (${linkedInJobs.length} LinkedIn, ${tanitJobs.length} TanitJobs, ${indeedJobs.length} Indeed)`);
-  return deduped;
 }
