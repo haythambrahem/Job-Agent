@@ -131,9 +131,9 @@ async function chat(userMessage: string, history: any[]): Promise<string> {
 }
 
 async function main() {
-  console.log("╔════════════════════════════════════════╗");
-  console.log("║   🚀 Job Application Agent  (gratuit)  ║");
-  console.log("╚════════════════════════════════════════╝");
+  console.log("╔══════════════════════════════╗");
+  console.log("║   🚀 Job Application Agent   ║");
+  console.log("╚══════════════════════════════╝");
   console.log("\n💡 Exemples de commandes :");
   console.log('   "Cherche des offres java en Tunisie"');
   console.log('   "Envoie ma candidature à jobs@example.com pour java Developer chez Startup"');
