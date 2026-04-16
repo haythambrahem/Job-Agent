@@ -18,3 +18,7 @@ Thumbs.db
 
 # build
 dist/
+
+# prisma
+apps/api/prisma/dev.db
+apps/api/prisma/dev.db-journal

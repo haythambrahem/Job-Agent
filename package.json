@@ -1,30 +1,17 @@
 {
-  "name": "job-agent",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "job-agent-saas",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "start": "tsx src/agent.ts",
-    "dev": "tsx watch src/agent.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "dotenv": "^17.4.1",
-    "exceljs": "^4.4.0",
-    "googleapis": "^171.4.0",
-    "groq-sdk": "^1.1.2",
-    "open": "^11.0.0",
-    "pdfjs-dist": "^5.6.205",
-    "playwright": "^1.59.1"
-  },
-  "devDependencies": {
-    "@types/node": "^25.6.0",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.2"
+    "dev:api": "npm run dev --workspace @job-agent/api",
+    "dev:web": "npm run dev --workspace @job-agent/web",
+    "build": "npm run build --workspace @job-agent/core && npm run build --workspace @job-agent/api && npm run build --workspace @job-agent/web",
+    "db:generate": "npm run db:generate --workspace @job-agent/api",
+    "db:push": "npm run db:push --workspace @job-agent/api"
   }
 }
