@@ -29,6 +29,14 @@ function dedupe(jobs: ScrapedJob[]): ScrapedJob[] {
   });
 }
 
+type ExtractedJob = {
+  title: string;
+  company: string;
+  description: string;
+  locationText: string;
+  applyUrl: string;
+};
+
 async function scrapeLinkedIn(browser: Browser, args: ScrapeJobsInput): Promise<ScrapedJob[]> {
   const page = await browser.newPage();
   try {
@@ -39,22 +47,23 @@ async function scrapeLinkedIn(browser: Browser, args: ScrapeJobsInput): Promise<
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: DEFAULT_TIMEOUT_MS });
     await page.waitForSelector(".job-search-card, .base-card", { timeout: DEFAULT_TIMEOUT_MS }).catch(() => undefined);
 
-    const jobs = await page.evaluate((limit) =>
-      Array.from(document.querySelectorAll(".job-search-card, .base-card, li"))
-        .slice(0, limit)
-        .map((card) => {
-          const title = card.querySelector(".base-search-card__title, h3")?.textContent?.trim() ?? "";
-          const company = card.querySelector(".base-search-card__subtitle, h4")?.textContent?.trim() ?? "";
-          const description = card.querySelector(".job-search-card__snippet, p")?.textContent?.trim() ?? "";
-          const locationText = card.querySelector(".job-search-card__location")?.textContent?.trim() ?? "";
-          const applyUrl = (card.querySelector("a.base-card__full-link, a") as HTMLAnchorElement | null)?.href?.trim() ?? "";
-          return { title, company, description, locationText, applyUrl };
-        })
-        .filter((job) => job.title && job.company && job.applyUrl),
+    const jobs = await page.evaluate(
+      (limit: number) =>
+        Array.from(document.querySelectorAll(".job-search-card, .base-card, li"))
+          .slice(0, limit)
+          .map((card) => {
+            const title = card.querySelector(".base-search-card__title, h3")?.textContent?.trim() ?? "";
+            const company = card.querySelector(".base-search-card__subtitle, h4")?.textContent?.trim() ?? "";
+            const description = card.querySelector(".job-search-card__snippet, p")?.textContent?.trim() ?? "";
+            const locationText = card.querySelector(".job-search-card__location")?.textContent?.trim() ?? "";
+            const applyUrl = (card.querySelector("a.base-card__full-link, a") as HTMLAnchorElement | null)?.href?.trim() ?? "";
+            return { title, company, description, locationText, applyUrl };
+          })
+          .filter((job) => job.title && job.company && job.applyUrl),
       args.limitPerSource ?? DEFAULT_LIMIT_PER_SOURCE
     );
 
-    return jobs.map((job) => ({
+    return (jobs as ExtractedJob[]).map((job: ExtractedJob) => ({
       title: normalize(job.title),
       company: normalize(job.company),
       description: normalize(job.description),
@@ -80,23 +89,24 @@ async function scrapeIndeed(browser: Browser, args: ScrapeJobsInput): Promise<Sc
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: DEFAULT_TIMEOUT_MS });
     await page.waitForSelector(".job_seen_beacon, .result", { timeout: DEFAULT_TIMEOUT_MS }).catch(() => undefined);
 
-    const jobs = await page.evaluate((limit) =>
-      Array.from(document.querySelectorAll(".job_seen_beacon, .result, [data-testid='slider_item']"))
-        .slice(0, limit)
-        .map((card) => {
-          const title = card.querySelector("h2 a span, [data-testid='jobTitle']")?.textContent?.trim() ?? "";
-          const company = card.querySelector("[data-testid='company-name'], .companyName")?.textContent?.trim() ?? "";
-          const description = card.querySelector(".job-snippet, [data-testid='job-snippet']")?.textContent?.trim() ?? "";
-          const locationText = card.querySelector("[data-testid='text-location'], .companyLocation")?.textContent?.trim() ?? "";
-          const link = (card.querySelector("h2 a") as HTMLAnchorElement | null)?.getAttribute("href")?.trim() ?? "";
-          const applyUrl = link.startsWith("http") ? link : `https://fr.indeed.com${link}`;
-          return { title, company, description, locationText, applyUrl };
-        })
-        .filter((job) => job.title && job.company && job.applyUrl),
+    const jobs = await page.evaluate(
+      (limit: number) =>
+        Array.from(document.querySelectorAll(".job_seen_beacon, .result, [data-testid='slider_item']"))
+          .slice(0, limit)
+          .map((card) => {
+            const title = card.querySelector("h2 a span, [data-testid='jobTitle']")?.textContent?.trim() ?? "";
+            const company = card.querySelector("[data-testid='company-name'], .companyName")?.textContent?.trim() ?? "";
+            const description = card.querySelector(".job-snippet, [data-testid='job-snippet']")?.textContent?.trim() ?? "";
+            const locationText = card.querySelector("[data-testid='text-location'], .companyLocation")?.textContent?.trim() ?? "";
+            const link = (card.querySelector("h2 a") as HTMLAnchorElement | null)?.getAttribute("href")?.trim() ?? "";
+            const applyUrl = link.startsWith("http") ? link : `https://fr.indeed.com${link}`;
+            return { title, company, description, locationText, applyUrl };
+          })
+          .filter((job) => job.title && job.company && job.applyUrl),
       args.limitPerSource ?? DEFAULT_LIMIT_PER_SOURCE
     );
 
-    return jobs.map((job) => ({
+    return (jobs as ExtractedJob[]).map((job: ExtractedJob) => ({
       title: normalize(job.title),
       company: normalize(job.company),
       description: normalize(job.description),
@@ -121,22 +131,23 @@ async function scrapeTanitJobs(browser: Browser, args: ScrapeJobsInput): Promise
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: DEFAULT_TIMEOUT_MS });
     await page.waitForSelector("article, .job-item, .search-results li", { timeout: DEFAULT_TIMEOUT_MS }).catch(() => undefined);
 
-    const jobs = await page.evaluate((limit) =>
-      Array.from(document.querySelectorAll("article, .job-item, .search-results li, .media"))
-        .slice(0, limit)
-        .map((card) => {
-          const title = card.querySelector("h2 a, h3 a, .job-title a, .media-heading a")?.textContent?.trim() ?? "";
-          const company = card.querySelector(".company, .job-company, .listing-company")?.textContent?.trim() ?? "";
-          const description = card.querySelector(".description, .job-description, p")?.textContent?.trim() ?? "";
-          const locationText = card.querySelector(".location, .job-location, .listing-location")?.textContent?.trim() ?? "";
-          const applyUrl = (card.querySelector("h2 a, h3 a, .job-title a, .media-heading a") as HTMLAnchorElement | null)?.href?.trim() ?? "";
-          return { title, company, description, locationText, applyUrl };
-        })
-        .filter((job) => job.title && job.applyUrl),
+    const jobs = await page.evaluate(
+      (limit: number) =>
+        Array.from(document.querySelectorAll("article, .job-item, .search-results li, .media"))
+          .slice(0, limit)
+          .map((card) => {
+            const title = card.querySelector("h2 a, h3 a, .job-title a, .media-heading a")?.textContent?.trim() ?? "";
+            const company = card.querySelector(".company, .job-company, .listing-company")?.textContent?.trim() ?? "";
+            const description = card.querySelector(".description, .job-description, p")?.textContent?.trim() ?? "";
+            const locationText = card.querySelector(".location, .job-location, .listing-location")?.textContent?.trim() ?? "";
+            const applyUrl = (card.querySelector("h2 a, h3 a, .job-title a, .media-heading a") as HTMLAnchorElement | null)?.href?.trim() ?? "";
+            return { title, company, description, locationText, applyUrl };
+          })
+          .filter((job) => job.title && job.applyUrl),
       args.limitPerSource ?? DEFAULT_LIMIT_PER_SOURCE
     );
 
-    return jobs.map((job) => ({
+    return (jobs as ExtractedJob[]).map((job: ExtractedJob) => ({
       title: normalize(job.title),
       company: normalize(job.company || "Unknown company"),
       description: normalize(job.description),

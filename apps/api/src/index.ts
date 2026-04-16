@@ -139,13 +139,10 @@ const store = {
   findApplicationById(userId: string, id: string): Promise<Application | null> {
     return prisma.application.findFirst({ where: { id, userId } }) as unknown as Promise<Application | null>;
   },
-  updateApplicationStatus(userId: string, id: string, status: "pending" | "approved" | "rejected" | "sent"): Promise<Application> {
-    return prisma.application.update({ where: { id }, data: { status }, }).then(async (updated) => {
-      if (updated.userId !== userId) {
-        throw new Error("Application not found");
-      }
-      return updated as unknown as Application;
-    });
+  async updateApplicationStatus(userId: string, id: string, status: "pending" | "approved" | "rejected" | "sent"): Promise<Application> {
+    const existing = await prisma.application.findFirst({ where: { id, userId } });
+    if (!existing) throw new Error("Application not found");
+    return prisma.application.update({ where: { id }, data: { status } }) as unknown as Promise<Application>;
   },
   async createAIRun(userId: string, input: { type: string; status: string }): Promise<void> {
     await prisma.aIRun.create({ data: { userId, type: input.type, status: input.status } });
@@ -268,7 +265,6 @@ app.post("/jobs/search", validateSubscription("pro"), async (req, res) => {
         store
       )
     );
-    io.emit("jobs:new", { userId, count: jobs.length });
     res.json({ jobs });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "job search failed" });
@@ -326,7 +322,6 @@ app.post("/applications/apply", async (req, res) => {
       })
     );
 
-    io.emit("approval:needed", { userId, id: application.id, company: application.company, title: application.title });
 
     res.status(201).json(application);
   } catch (error: any) {
@@ -356,7 +351,6 @@ app.post("/applications/:id/approve", async (req, res) => {
   try {
     const userId = req.user!.id;
     const application = await applicationQueue.enqueue(() => approveAndSendApplication(userId, req.params.id, store));
-    io.emit("applications:updated", { userId, id: application.id, status: application.status });
     res.json(application);
   } catch (error: any) {
     res.status(400).json({ error: error?.message || "approval failed" });
@@ -378,7 +372,6 @@ app.post("/applications/:id/reject", async (req, res) => {
     }
 
     const updated = await prisma.application.update({ where: { id: req.params.id }, data: { status: "rejected" } });
-    io.emit("applications:updated", { userId, id: updated.id, status: updated.status });
     res.json(updated);
   } catch (error: any) {
     res.status(400).json({ error: error?.message || "rejection failed" });

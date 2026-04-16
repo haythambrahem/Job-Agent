@@ -1,40 +1,45 @@
 # Job-Agent SaaS Platform
 
-Production SaaS refactor of the original CLI job agent into a monorepo architecture.
+Production SaaS refactor of the original CLI job agent into a secure multi-tenant monorepo.
 
 ## Monorepo structure
 
 ```text
 apps/
-  api/        # Express API + Prisma + Socket.io
-  web/        # React + Vite + Tailwind dashboard
+  api/        # Express API + Prisma + Stripe + tenant isolation
+  web/        # Next.js + NextAuth frontend
 packages/
   core/       # Shared business logic (scraping, AI, matching, email, pipeline)
 ```
 
 ## Key capabilities
 
-- Job scraping pipeline (multi-source Playwright scraping)
-- CV matching + AI cover letter generation
-- Approval-first application flow (`pending -> approved -> sent`)
-- Database persistence with Prisma + SQLite (ready to upgrade to Postgres)
-- API endpoints for jobs, applications, approvals, and previews
-- React dashboard with sidebar, stats cards, jobs list, applications table, and approval modal
-- Real-time frontend refresh through Socket.io events
-- Basic production safety: input checks, rate limiting, request/action logging, approval gate before send
+- NextAuth-based user authentication
+- Multi-tenant data isolation (`userId` scoping on all domain entities)
+- Stripe checkout, billing portal, and webhook subscription sync
+- Plan/feature gating (`free`, `pro`, `premium`)
+- Free-tier monthly quota enforcement (10 applications/month)
+- Job scraping + AI matching + approval-first application flow
 
-## API endpoints
+## Environment variables
 
-### Jobs
-- `GET /jobs`
-- `POST /jobs/search`
+### Shared
+- `DATABASE_URL` (PostgreSQL)
 
-### Applications
-- `GET /applications`
-- `POST /applications/apply`
-- `GET /applications/:id/preview`
-- `POST /applications/:id/approve`
-- `POST /applications/:id/reject`
+### Web (`apps/web`)
+- `NEXTAUTH_SECRET`
+- `NEXTAUTH_URL`
+- `NEXT_PUBLIC_API_BASE_URL`
+
+### API (`apps/api`)
+- `API_PORT`
+- `WEB_ORIGIN`
+- `NEXTAUTH_SECRET`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_PRICE_PRO`
+- `STRIPE_PRICE_PREMIUM`
+- `GROQ_API_KEY`
 
 ## Local setup
 
@@ -44,37 +49,21 @@ packages/
 npm install
 ```
 
-2. Configure environment (example)
+2. Generate Prisma client and apply schema
 
 ```bash
-export DATABASE_URL='file:./prisma/dev.db'
-export GROQ_API_KEY='...'
-export WEB_ORIGIN='http://localhost:5173'
+npm run db:generate
+npm run db:push
 ```
 
-3. Generate Prisma client and sync schema
-
-```bash
-DATABASE_URL='file:./prisma/dev.db' npm run db:generate
-DATABASE_URL='file:./prisma/dev.db' npm run db:push
-```
-
-
-Web app API URL config:
-
-```bash
-# apps/web/.env
-VITE_API_BASE_URL="http://localhost:4000"
-```
-
-4. Run apps
+3. Run apps
 
 ```bash
 npm run dev:api
 npm run dev:web
 ```
 
-5. Build all workspaces
+4. Build all workspaces
 
 ```bash
 npm run build
