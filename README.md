@@ -99,5 +99,4 @@ npx tsx src/server.ts
 
 ## Notes
 
-- Current `npm test` is a placeholder and intentionally exits with error (`"Error: no test specified"`).
 - Main implementation language and many prompts/messages are in French.
