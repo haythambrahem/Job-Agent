@@ -4,6 +4,14 @@ import { searchJobs } from "./tools/linkedin.js";
 import { generateCoverLetter } from "./tools/cv.js";
 import { getCandidatures, saveCandidature } from "./tools/tracker.js";
 import readline from "readline";
+import open from "open";
+import { approvalState, resetApprovalState } from "./state/approvalState.js";
+import { startApprovalServer } from "./ui/server.js";
+import {
+  APPROVAL_DECISION_POLL_INTERVAL_MS,
+  APPROVAL_DECISION_TIMEOUT_MS,
+  APPROVAL_UI_BASE_URL
+} from "./ui/config.js";
 import "dotenv/config";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -101,23 +109,7 @@ type SendApplicationArgs = {
   company: string;
   job_title: string;
   cover_letter: string;
-  application?: {
-    status: "pending" | "approved" | "rejected";
-  };
 };
-
-type PendingApplication = {
-  job: {
-    title: string;
-    company: string;
-    email: string;
-  };
-  coverLetter: string;
-  status: "pending" | "approved" | "rejected";
-};
-
-let pendingApplication: PendingApplication | null = null;
-let cliReadline: readline.Interface | null = null;
 
 const REQUIRED_ARGS: Record<string, string[]> = {
   search_jobs: ["keywords"],
@@ -232,14 +224,36 @@ function getIntentBlockedToolReason(intent: Intent, toolName: string): string | 
   return null;
 }
 
-async function askForApproval(message: string): Promise<boolean> {
-  console.log(message);
+async function postPreview(args: SendApplicationArgs, coverLetter: string): Promise<void> {
+  const response = await fetch(`${APPROVAL_UI_BASE_URL}/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      job: {
+        title: args.job_title,
+        company: args.company,
+        email: args.to_email
+      },
+      coverLetter
+    })
+  });
 
-  const askWith = (rl: readline.Interface): Promise<string> =>
-    new Promise((resolve) => rl.question("Do you want to send this application? (yes/no) ", resolve));
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data?.error || "Preview API call failed");
+  }
+}
 
-  const answer = (cliReadline ? await askWith(cliReadline) : "").trim().toLowerCase();
-  return ["yes", "approve", "approved", "send"].includes(answer);
+async function waitForDecision(): Promise<"approved" | "rejected"> {
+  const startedAt = Date.now();
+  while (true) {
+    if (approvalState.decision === "approved") return "approved";
+    if (approvalState.decision === "rejected") return "rejected";
+    if (Date.now() - startedAt >= APPROVAL_DECISION_TIMEOUT_MS) {
+      throw new Error("Approval timeout");
+    }
+    await new Promise((resolve) => setTimeout(resolve, APPROVAL_DECISION_POLL_INTERVAL_MS));
+  }
 }
 
 async function requestForcedToolCall(
@@ -375,62 +389,46 @@ async function runApplyMode(userMessage: string, messages: any[]): Promise<strin
     return `INVALID_TOOL_ARGS: ${sendValidation.reason}`;
   }
 
-  pendingApplication = {
-    job: {
-      title: sendArgs.job_title,
-      company: sendArgs.company,
-      email: sendArgs.to_email
-    },
-    coverLetter,
-    status: "pending"
-  };
+  await postPreview(sendArgs, coverLetter);
+  await open(APPROVAL_UI_BASE_URL).catch(() => {
+    console.warn(`⚠️ Could not auto-open browser. Open manually: ${APPROVAL_UI_BASE_URL}`);
+  });
 
-  const reviewScreen = [
-    "====================================",
-    "📩 APPLICATION REVIEW",
-    "====================================",
-    `Company: ${pendingApplication.job.company}`,
-    `Position: ${pendingApplication.job.title}`,
-    `Email: ${pendingApplication.job.email}`,
-    "",
-    "📄 Cover Letter:",
-    "",
-    pendingApplication.coverLetter,
-    ""
-  ].join("\n");
-
-  const approved = await askForApproval(reviewScreen);
-  if (!approved) {
-    pendingApplication.status = "rejected";
-    pendingApplication = null;
+  let decision: "approved" | "rejected";
+  try {
+    decision = await waitForDecision();
+  } catch {
+    resetApprovalState();
+    return "⌛ Approval timed out. No email was sent.";
+  }
+  if (decision !== "approved") {
+    resetApprovalState();
     return "❌ Application cancelled by user";
   }
-
-  pendingApplication.status = "approved";
-  sendArgs.application = { status: pendingApplication.status };
 
   const sendResult = await runTool("send_application", sendArgs);
   console.log(`   ✅ ${sendResult.substring(0, 80)}`);
   if (sendResult.startsWith("Échec outil send_application")) {
-    pendingApplication = null;
+    resetApprovalState();
     return sendResult;
   }
   messages.push({ role: "tool", tool_call_id: sendStep.call.id, content: sendResult });
 
   const saveArgs = {
-    to_email: pendingApplication.job.email,
-    company: pendingApplication.job.company,
-    job_title: pendingApplication.job.title
+    to_email: sendArgs.to_email,
+    company: sendArgs.company,
+    job_title: sendArgs.job_title
   };
   const saveValidation = validateToolArgs("save_candidature", saveArgs);
   if (!saveValidation.valid) {
     logToolDebug(userMessage, "apply", "save_candidature", { args: saveArgs, error: saveValidation.reason });
+    resetApprovalState();
     return `INVALID_TOOL_ARGS: ${saveValidation.reason}`;
   }
 
   const saveResult = await runTool("save_candidature", saveArgs);
   console.log(`   ✅ ${saveResult.substring(0, 80)}`);
-  pendingApplication = null;
+  resetApprovalState();
   return `✅ Candidature envoyée chez ${String(sendArgs.company ?? "entreprise")}`;
 }
 
@@ -484,6 +482,8 @@ async function chat(userMessage: string, history: any[]): Promise<string> {
 }
 
 async function main() {
+  await startApprovalServer();
+
   console.log("╔══════════════════════════════╗");
   console.log("║   🚀 Job Application Agent   ║");
   console.log("╚══════════════════════════════╝");
@@ -493,7 +493,6 @@ async function main() {
   console.log('   "Montre moi mes candidatures"\n');
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  cliReadline = rl;
   const history: any[] = [];
 
   const ask = () => {
