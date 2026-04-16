@@ -101,18 +101,6 @@ function detectIntent(message: string): Intent {
   const text = message.toLowerCase();
 
   if (
-    text.includes("candidature") ||
-    text.includes("candidatures") ||
-    text.includes("applications") ||
-    text.includes("application") ||
-    text.includes("mes candidatures") ||
-    text.includes("historique") ||
-    text.includes("history")
-  ) {
-    return "history";
-  }
-
-  if (
     text.includes("envoie") ||
     text.includes("postule") ||
     text.includes("postuler") ||
@@ -129,6 +117,18 @@ function detectIntent(message: string): Intent {
     text.includes("offre")
   ) {
     return "search";
+  }
+
+  if (
+    text.includes("candidature") ||
+    text.includes("candidatures") ||
+    text.includes("applications") ||
+    text.includes("application") ||
+    text.includes("mes candidatures") ||
+    text.includes("historique") ||
+    text.includes("history")
+  ) {
+    return "history";
   }
 
   return "unknown";
