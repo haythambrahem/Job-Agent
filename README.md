@@ -59,6 +59,14 @@ DATABASE_URL='file:./prisma/dev.db' npm run db:generate
 DATABASE_URL='file:./prisma/dev.db' npm run db:push
 ```
 
+
+Web app API URL config:
+
+```bash
+# apps/web/.env
+VITE_API_BASE_URL="http://localhost:4000"
+```
+
 4. Run apps
 
 ```bash
