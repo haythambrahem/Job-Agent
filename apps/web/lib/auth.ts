@@ -1,7 +1,7 @@
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { compare } from "bcryptjs";
+import { compare } from "bcrypt";
 import { z } from "zod";
 import { prisma } from "./prisma";
 
@@ -23,13 +23,19 @@ export const authOptions: NextAuthOptions = {
           .object({ email: z.string().email(), password: z.string().min(8) })
           .safeParse(credentials);
 
-        if (!parsed.success) return null;
+        if (!parsed.success) {
+          throw new Error("Invalid email or password");
+        }
 
         const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
-        if (!user?.password) return null;
+        if (!user?.password) {
+          throw new Error("Invalid email or password");
+        }
 
         const valid = await compare(parsed.data.password, user.password);
-        if (!valid) return null;
+        if (!valid) {
+          throw new Error("Invalid email or password");
+        }
 
         return {
           id: user.id,
@@ -59,6 +65,7 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.sub || "";
+        session.user.email = token.email || "";
         session.user.plan = (token.plan as "free" | "pro" | "premium") || "free";
       }
       return session;
