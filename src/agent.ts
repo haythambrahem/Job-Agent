@@ -141,7 +141,7 @@ function detectIntent(message: string): Intent {
     hasWord("voir") ||
     hasWord("liste");
 
-  if (text.includes("mes candidatures") || hasHistoryNoun || hasHistoryContext) {
+  if (hasHistoryNoun || hasHistoryContext) {
     return "history";
   }
 
@@ -177,8 +177,13 @@ function validateToolArgs(name: string, args: Record<string, any>): { valid: tru
     if (!(key in args)) {
       return { valid: false, reason: `missing required argument: ${key}` };
     }
-    if (ARG_TYPES[name]?.[key] === "string" && (typeof args[key] !== "string" || !args[key].trim())) {
-      return { valid: false, reason: `missing or invalid required argument: ${key}` };
+    if (ARG_TYPES[name]?.[key] === "string") {
+      if (typeof args[key] !== "string") {
+        return { valid: false, reason: `missing or invalid required argument: ${key}` };
+      }
+      if (!args[key].trim()) {
+        return { valid: false, reason: `missing or invalid required argument: ${key}` };
+      }
     }
   }
 
@@ -195,6 +200,13 @@ function logToolDebug(userMessage: string, intent: Intent, selectedTool: string 
   console.error("   detected intent:", intent);
   console.error("   selected tool:", selectedTool ?? "none");
   console.error("   failed payload:", JSON.stringify(payload ?? {}, null, 2));
+}
+
+function getIntentBlockedToolReason(intent: Intent, toolName: string): string | null {
+  if (intent === "history" && toolName === "search_jobs") {
+    return "search_jobs interdit pour une demande d'historique. Utilise get_candidatures.";
+  }
+  return null;
 }
 
 async function runTool(name: string, args: any): Promise<string> {
@@ -278,14 +290,15 @@ async function chat(userMessage: string, history: any[]): Promise<string> {
       let toolName = call.function.name;
       let args: Record<string, any> = {};
 
-      if (toolName === "search_jobs" && intent === "history") {
-        const blockReason = "TOOL_BLOCKED: search_jobs interdit pour une demande d'historique. Utilise get_candidatures.";
+      const blockedReason = getIntentBlockedToolReason(intent, toolName);
+      if (blockedReason) {
+        const blockReason = `TOOL_BLOCKED: ${blockedReason}`;
         console.warn(`⚠️ ${blockReason}`);
         logToolDebug(userMessage, intent, toolName, { reason: blockReason, arguments: call.function.arguments });
         messages.push({ role: "tool", tool_call_id: call.id, content: blockReason });
         messages.push({
           role: "system",
-          content: "Correction: pour cet intent history, appelle uniquement get_candidatures sans paramètres."
+          content: "Correction: applique strictement le routage par intention et appelle l'outil approprié avec un schéma valide."
         });
         continue;
       } else {
