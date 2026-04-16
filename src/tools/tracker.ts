@@ -76,7 +76,8 @@ export async function getCandidatures(): Promise<CandidatureEntry[]> {
     });
 
     return rows;
-  } catch {
+  } catch (err: any) {
+    console.error("❌ Impossible de lire candidatures.xlsx:", err?.message || err);
     return [];
   }
 }

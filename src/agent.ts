@@ -99,11 +99,12 @@ const REQUIRED_ARGS: Record<string, string[]> = {
 
 function detectIntent(message: string): Intent {
   const text = message.toLowerCase();
+  const hasWord = (pattern: string): boolean => new RegExp(`\\b${pattern}\\b`, "i").test(text);
 
   if (
-    text.includes("envoie") ||
-    text.includes("postule") ||
-    text.includes("postuler") ||
+    hasWord("envoie") ||
+    hasWord("postule") ||
+    hasWord("postuler") ||
     text.includes("candidature à envoyer") ||
     text.includes("candidature a envoyer")
   ) {
@@ -111,22 +112,34 @@ function detectIntent(message: string): Intent {
   }
 
   if (
-    text.includes("cherche") ||
-    text.includes("trouve") ||
-    text.includes("offres") ||
-    text.includes("offre")
+    hasWord("cherche") ||
+    hasWord("trouve") ||
+    hasWord("offres") ||
+    hasWord("offre")
   ) {
     return "search";
   }
 
-  if (
-    text.includes("candidature") ||
-    text.includes("candidatures") ||
-    text.includes("applications") ||
-    text.includes("application") ||
+  const hasHistoryNoun =
+    hasWord("candidature") ||
+    hasWord("candidatures") ||
+    hasWord("application") ||
+    hasWord("applications");
+  const hasHistoryContext =
     text.includes("mes candidatures") ||
-    text.includes("historique") ||
-    text.includes("history")
+    hasWord("historique") ||
+    hasWord("history") ||
+    hasWord("montre") ||
+    hasWord("voir") ||
+    hasWord("liste");
+
+  if (
+    hasWord("candidature") ||
+    hasWord("candidatures") ||
+    hasWord("application") ||
+    text.includes("mes candidatures") ||
+    (hasHistoryNoun && hasHistoryContext) ||
+    hasWord("applications")
   ) {
     return "history";
   }
@@ -238,7 +251,7 @@ async function chat(userMessage: string, history: any[]): Promise<string> {
         max_tokens: 2000
       });
     } catch (err: any) {
-      logToolDebug(userMessage, intent, typeof selectedToolForRequest === "string" ? selectedToolForRequest : null, err?.error ?? err);
+      logToolDebug(userMessage, intent, selectedToolForRequest, err?.error ?? err);
       if (isToolUseFailedError(err) && !hasRetriedToolUseFailed) {
         hasRetriedToolUseFailed = true;
         messages.push({
