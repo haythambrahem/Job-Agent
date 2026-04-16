@@ -33,7 +33,13 @@ type Subscription = {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
 
-export default function DashboardClient({ user }: { user: { id: string; email: string; plan: "free" | "pro" | "premium" } }) {
+export default function DashboardClient({
+  user,
+  accessToken
+}: {
+  user: { id: string; email: string; plan: "free" | "pro" | "premium" };
+  accessToken: string | null;
+}) {
   const [page, setPage] = useState<Page>("dashboard");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -52,6 +58,7 @@ export default function DashboardClient({ user }: { user: { id: string; email: s
       credentials: "include",
       headers: {
         "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...(init?.headers || {})
       }
     });
