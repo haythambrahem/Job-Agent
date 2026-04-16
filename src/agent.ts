@@ -96,6 +96,13 @@ type ToolName =
   | "save_candidature"
   | "get_candidatures";
 
+type SendApplicationArgs = {
+  to_email: string;
+  company: string;
+  job_title: string;
+  cover_letter: string;
+};
+
 const REQUIRED_ARGS: Record<string, string[]> = {
   search_jobs: ["keywords"],
   generate_cover_letter: ["job_title", "company", "job_description"],
@@ -215,7 +222,7 @@ async function requestForcedToolCall(
   intent: Intent,
   forcedTool: ToolName
 ): Promise<{ ok: true; choiceMessage: any; call: any } | { ok: false; error: string }> {
-  let hasRetriedToolUseFailed = false;
+  let toolUseFailedRetryAttempted = false;
 
   while (true) {
     let response: any;
@@ -232,15 +239,16 @@ async function requestForcedToolCall(
       });
     } catch (err: any) {
       logToolDebug(userMessage, intent, forcedTool, err?.error ?? err);
-      if (isToolUseFailedError(err) && !hasRetriedToolUseFailed) {
-        hasRetriedToolUseFailed = true;
+      if (isToolUseFailedError(err) && !toolUseFailedRetryAttempted) {
+        toolUseFailedRetryAttempted = true;
+        const requiredArgs = REQUIRED_ARGS[forcedTool].join(", ") || "none";
         messages.push({
           role: "system",
-          content: `Retry after tool_use_failed. intent="${intent}", forced_tool="${forcedTool}". Return exactly one valid tool call with complete JSON object arguments.`
+          content: `Retry after tool_use_failed. Intent=${intent}. You must call only ${forcedTool} with a valid JSON object. Required arguments: ${requiredArgs}. Return exactly one tool call.`
         });
         continue;
       }
-      return { ok: false, error: "❌ Je n'ai pas pu traiter la demande maintenant. Réessaie avec plus de détails." };
+      return { ok: false, error: "❌ Erreur Groq lors de l'appel outil. Vérifie les champs requis puis réessaie." };
     }
 
     const choice = response.choices[0];
@@ -255,7 +263,7 @@ async function requestForcedToolCall(
         reason: `forced tool mismatch, expected ${forcedTool}`,
         arguments: call.function.arguments
       });
-      return { ok: false, error: "❌ Réponse outil invalide. Réessaie avec une instruction plus précise." };
+      return { ok: false, error: `❌ Outil inattendu reçu (${call.function.name}). Outil attendu: ${forcedTool}.` };
     }
 
     return { ok: true, choiceMessage: choice.message, call };
@@ -334,7 +342,7 @@ async function runApplyMode(userMessage: string, messages: any[]): Promise<strin
 
   const parsedSend = parseAndValidateCall(sendStep.call, userMessage, "apply");
   if (!parsedSend.ok) return parsedSend.error;
-  const sendArgs: Record<string, any> = { ...parsedSend.args, cover_letter: coverLetter };
+  const sendArgs: SendApplicationArgs = { ...parsedSend.args, cover_letter: coverLetter } as SendApplicationArgs;
   const sendValidation = validateToolArgs("send_application", sendArgs);
   if (!sendValidation.valid) {
     logToolDebug(userMessage, "apply", "send_application", { args: sendArgs, error: sendValidation.reason });
@@ -346,9 +354,9 @@ async function runApplyMode(userMessage: string, messages: any[]): Promise<strin
   messages.push({ role: "tool", tool_call_id: sendStep.call.id, content: sendResult });
 
   const saveArgs = {
-    to_email: String(sendArgs.to_email ?? ""),
-    company: String(sendArgs.company ?? ""),
-    job_title: String(sendArgs.job_title ?? "")
+    to_email: sendArgs.to_email,
+    company: sendArgs.company,
+    job_title: sendArgs.job_title
   };
   const saveValidation = validateToolArgs("save_candidature", saveArgs);
   if (!saveValidation.valid) {
@@ -407,7 +415,7 @@ async function chat(userMessage: string, history: any[]): Promise<string> {
   if (intent === "history") {
     return runHistoryMode(userMessage, messages);
   }
-  return "Je peux chercher des offres, postuler, ou afficher l'historique des candidatures. Reformule ta demande.";
+  return "Intention non reconnue. Utilise par exemple: 'find jobs matching my CV', 'apply to this job', ou 'show my applications'.";
 }
 
 async function main() {
