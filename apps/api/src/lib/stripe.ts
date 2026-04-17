@@ -1,8 +1,8 @@
 import Stripe from "stripe";
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "";
-const stripePricePro = process.env.STRIPE_PRICE_PRO || process.env.STRIPE_PRICE_ID || "";
-const stripePricePremium = process.env.STRIPE_PRICE_PREMIUM || "";
+const stripePricePro = process.env.STRIPE_PRO_PRICE_ID || process.env.STRIPE_PRICE_PRO || process.env.STRIPE_PRICE_ID || "";
+const stripePricePremium = process.env.STRIPE_PREMIUM_PRICE_ID || process.env.STRIPE_PRICE_PREMIUM || "";
 
 const hasStripeSecret = stripeSecretKey.length > 0;
 const hasAnyPriceConfig = stripePricePro.length > 0 || stripePricePremium.length > 0;

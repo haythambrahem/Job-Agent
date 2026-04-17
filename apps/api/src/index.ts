@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import http from "node:http";
 import { Server } from "socket.io";
+import type Stripe from "stripe";
 import {
   approveAndSendApplication,
   createPendingApplication,
@@ -29,6 +30,10 @@ const AUTO_APPLY_MIN_SCORE = 70;
 const AUTO_APPLY_LIMIT = 3;
 const AUTO_APPLY_DELAY_RANGE_MS = { min: 2000, max: 5000 };
 const FREE_PLAN_MONTHLY_LIMIT = 10;
+const PLAN_PRICE_MAP: Record<"pro" | "premium", string> = {
+  pro: STRIPE_PRICE_PRO,
+  premium: STRIPE_PRICE_PREMIUM
+};
 
 type AutoAppliedJob = { title: string; company: string; url: string; score: number; applicationId: string };
 type AutoApplySkippedJob = { title: string; company: string; url: string; score: number; reason: string };
@@ -39,6 +44,14 @@ const jobSearchSchema = z.object({
   limitPerSource: z.number().int().min(1).max(20).optional()
 });
 
+const envSchema = z.object({
+  STRIPE_SECRET_KEY: z.string().min(1),
+  STRIPE_WEBHOOK_SECRET: z.string().startsWith("whsec_"),
+  STRIPE_PRO_PRICE_ID: z.string().startsWith("price_"),
+  STRIPE_PREMIUM_PRICE_ID: z.string().startsWith("price_")
+});
+const env = envSchema.parse(process.env);
+
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -47,11 +60,13 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function getCurrentMonthRange() {
+function startOfCurrentMonthUtc(): Date {
   const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  return { start, end };
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+}
+
+function startOfNextMonthUtc(monthStart: Date): Date {
+  return new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 1, 0, 0, 0, 0));
 }
 
 function getFirstParam(value: string | string[] | undefined): string | null {
@@ -73,79 +88,128 @@ app.use((req, res, next) => {
 });
 
 const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
-  console.log("Webhook received");
-  const signature = req.headers["stripe-signature"];
-  if (!signature || !process.env.STRIPE_WEBHOOK_SECRET || !stripe) {
-    res.status(400).send("Missing Stripe signature or secret");
+  const signatureHeader = req.headers["stripe-signature"];
+  const signature = typeof signatureHeader === "string" ? signatureHeader : null;
+  if (!signature || !stripe) {
+    console.error("[Stripe webhook] Missing signature or Stripe client");
+    res.status(400).json({ error: "Missing webhook configuration" });
     return;
   }
 
-  let event;
+  let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(req.body, signature, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch {
-    res.status(400).send("Invalid webhook signature");
-    return;
-  }
-
-  try {
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const userId = session.metadata?.userId || session.client_reference_id;
-      const customerId = typeof session.customer === "string" ? session.customer : null;
-      const subscriptionId = typeof session.subscription === "string" ? session.subscription : null;
-      const metadataPlan = session.metadata?.plan;
-      const plan = metadataPlan === "premium" ? "premium" : "pro";
-
-      if (userId) {
-        await prisma.user.update({
-          where: { id: userId },
-          data: {
-            stripeCustomerId: customerId,
-            stripeSubscriptionId: subscriptionId,
-            plan,
-            subscriptionStatus: "active"
-          }
-        });
-        console.log(`User upgraded to ${plan.toUpperCase()}`);
-        console.log(`[stripe] checkout.session.completed user=${userId} plan=${plan}`);
-      }
-    }
-
-    if (event.type === "customer.subscription.created" || event.type === "customer.subscription.updated" || event.type === "customer.subscription.deleted") {
-      const subscription = event.data.object;
-      const customerId = typeof subscription.customer === "string" ? subscription.customer : null;
-      const subscriptionId = subscription.id;
-      const priceId = subscription.items.data[0]?.price?.id;
-      const plan = resolvePlanFromPriceId(priceId);
-      const status = subscription.status;
-
-      if (customerId) {
-        await prisma.user.updateMany({
-          where: { OR: [{ stripeCustomerId: customerId }, { stripeSubscriptionId: subscriptionId }] },
-          data: {
-            stripeSubscriptionId: subscriptionId,
-            plan: status === "active" || status === "trialing" ? plan : "free",
-            subscriptionStatus:
-              status === "active" || status === "trialing"
-                ? "active"
-                : status === "past_due"
-                  ? "past_due"
-                  : status === "unpaid"
-                    ? "unpaid"
-                    : "canceled"
-          }
-        });
-        console.log(`[stripe] ${event.type} customer=${customerId} status=${status} plan=${plan}`);
-      }
-    }
-
-    res.json({ received: true });
+    event = stripe.webhooks.constructEvent(req.body as Buffer, signature, env.STRIPE_WEBHOOK_SECRET);
   } catch (error) {
-    console.error("[stripe] webhook handling failed", error);
-    res.status(500).json({ error: "webhook handling failed" });
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[Stripe webhook] Signature verification failed: ${message}`);
+    res.status(400).json({ error: `Webhook signature invalid: ${message}` });
+    return;
   }
+
+  console.log(`[Stripe webhook] Received event: ${event.type} | id: ${event.id}`);
+  res.status(200).json({ received: true });
+
+  void (async () => {
+    try {
+      if (event.type === "checkout.session.completed") {
+        await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+      }
+
+      if (event.type === "customer.subscription.deleted") {
+        await handleSubscriptionCancelled(event.data.object as Stripe.Subscription);
+      }
+
+      if (event.type === "customer.subscription.created" || event.type === "customer.subscription.updated") {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = typeof subscription.customer === "string" ? subscription.customer : null;
+        const subscriptionId = subscription.id;
+        const priceId = subscription.items.data[0]?.price?.id;
+        const plan = resolvePlanFromPriceId(priceId);
+        const status = subscription.status;
+
+        if (customerId) {
+          await prisma.user.updateMany({
+            where: { OR: [{ stripeCustomerId: customerId }, { stripeSubscriptionId: subscriptionId }] },
+            data: {
+              stripeSubscriptionId: subscriptionId,
+              plan: status === "active" || status === "trialing" ? plan : "free",
+              subscriptionStatus:
+                status === "active" || status === "trialing"
+                  ? "active"
+                  : status === "past_due"
+                    ? "past_due"
+                    : status === "unpaid"
+                      ? "unpaid"
+                      : "canceled"
+            }
+          });
+          console.log(`[stripe] ${event.type} customer=${customerId} status=${status} plan=${plan}`);
+        }
+      }
+    } catch (error) {
+      console.error(`[Stripe webhook] Handler error for ${event.type}`, error);
+    }
+  })();
 };
+
+async function handleCheckoutCompleted(session: Stripe.Checkout.Session): Promise<void> {
+  const userId = session.metadata?.userId;
+  const plan = session.metadata?.plan;
+
+  if (!userId) {
+    console.error("[Stripe webhook] checkout.session.completed: missing metadata.userId", {
+      sessionId: session.id
+    });
+    return;
+  }
+
+  if (plan !== "pro" && plan !== "premium") {
+    console.error("[Stripe webhook] checkout.session.completed: invalid metadata.plan", {
+      sessionId: session.id,
+      plan
+    });
+    return;
+  }
+
+  const existingUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { stripeCustomerId: true, stripeSubscriptionId: true }
+  });
+  if (!existingUser) {
+    console.error(`[Stripe webhook] User not found: ${userId}`);
+    return;
+  }
+
+  const stripeCustomerId = typeof session.customer === "string" ? session.customer : existingUser.stripeCustomerId;
+  const stripeSubscriptionId = typeof session.subscription === "string" ? session.subscription : existingUser.stripeSubscriptionId;
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      plan,
+      subscriptionStatus: "active",
+      stripeCustomerId,
+      stripeSubscriptionId
+    }
+  });
+
+  console.log(`[Stripe webhook] User upgraded to ${plan}`);
+}
+
+async function handleSubscriptionCancelled(subscription: Stripe.Subscription): Promise<void> {
+  const userId = subscription.metadata?.userId;
+  if (!userId) return;
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      plan: "free",
+      subscriptionStatus: "canceled"
+    }
+  });
+
+  console.log(`[Stripe webhook] Subscription canceled for user ${userId}`);
+}
 
 app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
 app.post("/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
@@ -207,10 +271,11 @@ app.get("/subscription", async (req, res) => {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
-  const { start, end } = getCurrentMonthRange();
+  const monthStart = startOfCurrentMonthUtc();
+  const nextMonthStart = startOfNextMonthUtc(monthStart);
 
   const usedApplications = await prisma.application.count({
-    where: { userId, createdAt: { gte: start, lt: end } }
+    where: { userId, createdAt: { gte: monthStart, lt: nextMonthStart } }
   });
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -245,21 +310,25 @@ app.post("/stripe/checkout", async (req, res) => {
   }
 
   const selectedPlan = parsed.data.plan;
-  const priceId = selectedPlan === "pro" ? STRIPE_PRICE_PRO : STRIPE_PRICE_PREMIUM;
+  const priceId = PLAN_PRICE_MAP[selectedPlan];
   if (!priceId || !stripe) {
-    res.status(503).json({ error: "Stripe disabled in development" });
+    res.status(400).json({ error: "Invalid plan. Must be pro or premium." });
     return;
   }
 
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
+    payment_method_types: ["card"],
     customer: user.stripeCustomerId || undefined,
     customer_email: user.stripeCustomerId ? undefined : user.email,
     line_items: [{ price: priceId, quantity: 1 }],
     success_url: `${process.env.WEB_ORIGIN || "http://localhost:3000"}/dashboard?billing=success`,
     cancel_url: `${process.env.WEB_ORIGIN || "http://localhost:3000"}/dashboard?billing=cancel`,
     client_reference_id: user.id,
-    metadata: { userId: user.id, plan: selectedPlan }
+    metadata: { userId: user.id, plan: selectedPlan },
+    subscription_data: {
+      metadata: { userId: user.id, plan: selectedPlan }
+    }
   });
 
   if (typeof session.customer === "string" && !user.stripeCustomerId) {
@@ -431,11 +500,12 @@ app.post("/applications/apply", async (req, res) => {
   const plan = user.plan ?? "free";
 
   if (plan === "free") {
-    const { start, end } = getCurrentMonthRange();
+    const monthStart = startOfCurrentMonthUtc();
+    const resetAt = startOfNextMonthUtc(monthStart);
     let monthlyCount = 0;
     try {
       monthlyCount = (await prisma.application.count({
-        where: { userId, createdAt: { gte: start, lt: end } }
+        where: { userId, createdAt: { gte: monthStart, lt: resetAt } }
       })) ?? 0;
     } catch (error) {
       monthlyCount = 0;
@@ -446,7 +516,10 @@ app.post("/applications/apply", async (req, res) => {
       console.log(`[applications] free-plan-limit-reached user=${userId} count=${monthlyCount}`);
       res.status(403).json({
         error: `Free plan limit reached (${FREE_PLAN_MONTHLY_LIMIT} applications/month). Upgrade required.`,
-        monthlyLimit: FREE_PLAN_MONTHLY_LIMIT
+        code: "FREE_LIMIT_REACHED",
+        used: monthlyCount,
+        limit: FREE_PLAN_MONTHLY_LIMIT,
+        resetsAt: resetAt.toISOString()
       });
       return;
     }
