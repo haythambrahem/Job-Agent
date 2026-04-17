@@ -7,12 +7,12 @@ export interface Job {
   company: string;
   url: string;
   source: string;
+  applyEmail?: string | null;
 }
 
 export interface ScrapedJob extends Job {
   description: string;
   location: string;
-  email?: string;
 }
 
 export interface MatchResult {
@@ -26,7 +26,7 @@ export interface Application {
   userId?: string;
   company: string;
   title: string;
-  email: string;
+  email: string | null;
   coverLetter: string;
   status: ApplicationStatus;
   createdAt: Date;
@@ -37,11 +37,4 @@ export interface GenerateCoverLetterInput {
   company: string;
   jobDescription: string;
   cvSummary?: string;
-}
-
-export interface SendEmailInput {
-  toEmail: string;
-  company: string;
-  jobTitle: string;
-  coverLetter: string;
 }

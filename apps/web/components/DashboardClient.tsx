@@ -12,13 +12,14 @@ type Job = {
   company: string;
   url: string;
   source: string;
+  applyEmail?: string | null;
 };
 
 type Application = {
   id: string;
   company: string;
   title: string;
-  email: string;
+  email: string | null;
   coverLetter: string;
   status: ApplicationStatus;
   createdAt: string;
@@ -48,6 +49,9 @@ export default function DashboardClient({
   const [location, setLocation] = useState("Tunisie");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [manualEmails, setManualEmails] = useState<Record<string, string>>({});
+  const [emailEditJobId, setEmailEditJobId] = useState<string | null>(null);
 
   const pendingCount = useMemo(() => applications.filter((a) => a.status === "pending").length, [applications]);
   const sentCount = useMemo(() => applications.filter((a) => a.status === "sent").length, [applications]);
@@ -68,7 +72,15 @@ export default function DashboardClient({
 
     if (!response.ok) {
       const body = await response.json().catch(() => ({ error: "Request failed" }));
-      throw new Error(body.error || "Request failed");
+      const requestError = new Error(body.error || "Request failed") as Error & {
+        code?: string;
+        status?: number;
+        jobTitle?: string;
+      };
+      requestError.code = typeof body.error === "string" ? body.error : undefined;
+      requestError.status = response.status;
+      requestError.jobTitle = typeof body.jobTitle === "string" ? body.jobTitle : undefined;
+      throw requestError;
     }
 
     return response.json() as Promise<T>;
@@ -103,19 +115,25 @@ export default function DashboardClient({
   }
 
   async function applyToJob(jobId: string) {
-    const email = window.prompt("Enter recipient email for this application:");
-    if (!email) return;
-
     setIsLoading(true);
     setError(null);
+    setToast(null);
     try {
+      const email = manualEmails[jobId]?.trim();
       await apiCall("/applications/apply", {
         method: "POST",
-        body: JSON.stringify({ jobId, email })
+        body: JSON.stringify({ jobId, email: email || undefined })
       });
       await refresh();
+      setEmailEditJobId(null);
       setPage("applications");
     } catch (err: any) {
+      if (err?.code === "NO_RECIPIENT_EMAIL") {
+        setToast("No contact email found for this job. Add it manually in the job card.");
+        setEmailEditJobId(jobId);
+        setPage("jobs");
+        return;
+      }
       setError(err.message);
     } finally {
       setIsLoading(false);
@@ -124,10 +142,16 @@ export default function DashboardClient({
 
   async function updateApplication(id: string, action: "approve" | "reject") {
     setError(null);
+    setToast(null);
     try {
       await apiCall(`/applications/${id}/${action}`, { method: "POST" });
       await refresh();
     } catch (err: any) {
+      if (err?.code === "NO_RECIPIENT_EMAIL") {
+        setToast("No contact email found for this job. Add it manually in the job card.");
+        setPage("jobs");
+        return;
+      }
       setError(err.message);
     }
   }
@@ -179,6 +203,7 @@ export default function DashboardClient({
 
       <main style={{ flex: 1, padding: 24 }}>
         {error ? <p style={{ color: "#dc2626" }}>{error}</p> : null}
+        {toast ? <p style={{ color: "#0a66c2" }}>{toast}</p> : null}
 
         {page === "dashboard" && (
           <section>
@@ -211,6 +236,16 @@ export default function DashboardClient({
                 <article key={job.id} style={{ background: "white", borderRadius: 8, padding: 12 }}>
                   <strong>{job.title}</strong>
                   <p>{job.company} · {job.source}</p>
+                  {emailEditJobId === job.id ? (
+                    <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                      <input
+                        value={manualEmails[job.id] ?? ""}
+                        onChange={(e) => setManualEmails((prev) => ({ ...prev, [job.id]: e.target.value }))}
+                        placeholder="Add contact email"
+                        type="email"
+                      />
+                    </div>
+                  ) : null}
                   <div style={{ display: "flex", gap: 10 }}>
                     <a href={job.url} target="_blank" rel="noreferrer">View</a>
                     <button onClick={() => applyToJob(job.id)}>Apply</button>

@@ -6,4 +6,5 @@ export * from "./scraper.js";
 export * from "./matcher.js";
 export * from "./coverLetter.js";
 export * from "./email.js";
+export * from "./emailTemplate.js";
 export * from "./pipeline.js";

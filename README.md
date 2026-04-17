@@ -35,12 +35,19 @@ packages/
 - `API_PORT`
 - `WEB_ORIGIN`
 - `NEXTAUTH_SECRET`
+- `CV_PDF_PATH` (default: `./assets/cv-haytham-brahem.pdf`)
 - `STRIPE_SECRET_KEY`
 - `STRIPE_PRICE_ID` (single-price fallback, useful in development)
 - `STRIPE_WEBHOOK_SECRET`
 - `STRIPE_PRICE_PRO`
 - `STRIPE_PRICE_PREMIUM`
 - `GROQ_API_KEY`
+
+### Core (`packages/core`)
+- `GROQ_API_KEY`
+- `GMAIL_CREDENTIALS_PATH`
+- `GMAIL_TOKEN_PATH`
+- `CV_PDF_PATH` (default: `./assets/cv-haytham-brahem.pdf`)
 
 ## Local setup
 
