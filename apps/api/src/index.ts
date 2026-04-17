@@ -326,7 +326,7 @@ app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
       );
       console.log(`[auto-apply] ranked jobs=${rankedJobs.length}`);
 
-      const candidates = rankedJobs.slice(0, AUTO_APPLY_LIMIT);
+      const candidates = rankedJobs.filter((job) => job.score >= AUTO_APPLY_MIN_SCORE).slice(0, AUTO_APPLY_LIMIT);
       console.log(`[auto-apply] selected jobs=${candidates.length}`);
 
       const applied: AutoAppliedJob[] = [];

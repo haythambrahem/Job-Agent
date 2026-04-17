@@ -46,7 +46,7 @@ function parseMatchResponse(content: string): {
 
 export async function matchJobToCV(jobDescription: string, cvText: string, jobTitle?: string): Promise<MatchResult> {
   if (!groq) {
-    throw new Error("GROQ_API_KEY not configured");
+    throw new Error("GROQ_API_KEY environment variable is not configured. Set GROQ_API_KEY to enable CV matching.");
   }
 
   try {
@@ -55,7 +55,7 @@ export async function matchJobToCV(jobDescription: string, cvText: string, jobTi
 
 Rules:
 - Output must be valid JSON with keys: score (0-100), matchedSkills (string[]), reasons (string[]).
-- Penalize irrelevant roles; only give scores >= 70 for strong matches.
+- Penalize irrelevant roles; use 0-69 for weak/no matches and 70-100 for strong matches.
 - Ensure matchedSkills includes any of these when present in both CV and job: Java, Spring Boot, Angular, APIs, Docker.
 - No markdown or extra text.
 
