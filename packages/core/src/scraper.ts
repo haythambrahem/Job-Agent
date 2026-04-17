@@ -9,6 +9,7 @@ export interface ScrapeJobsInput {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_LIMIT_PER_SOURCE = 10;
+const SCRAPE_DELAY_MS = 2_500;
 
 function normalize(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -37,6 +38,17 @@ type ExtractedJob = {
   applyUrl: string;
 };
 
+function getDescriptionOrDefault(job: ExtractedJob): string {
+  const normalizedDescription = normalize(job.description);
+  if (normalizedDescription) return normalizedDescription;
+  return normalize(`${job.title} at ${job.company} - ${job.locationText}`);
+}
+
+async function gotoAndStabilize(page: Awaited<ReturnType<Browser["newPage"]>>, url: string): Promise<void> {
+  await page.goto(url, { waitUntil: "networkidle", timeout: DEFAULT_TIMEOUT_MS });
+  await page.waitForTimeout(SCRAPE_DELAY_MS);
+}
+
 async function scrapeLinkedIn(browser: Browser, args: ScrapeJobsInput): Promise<ScrapedJob[]> {
   const page = await browser.newPage();
   try {
@@ -44,17 +56,21 @@ async function scrapeLinkedIn(browser: Browser, args: ScrapeJobsInput): Promise<
     const location = encodeURIComponent(args.location ?? "");
     const url = `https://www.linkedin.com/jobs/search/?keywords=${query}&location=${location}`;
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: DEFAULT_TIMEOUT_MS });
-    await page.waitForSelector(".job-search-card, .base-card", { timeout: DEFAULT_TIMEOUT_MS }).catch(() => undefined);
+    await gotoAndStabilize(page, url);
+    await page.waitForSelector(".base-card", { timeout: DEFAULT_TIMEOUT_MS }).catch((error) => {
+      throw new Error(
+        `LinkedIn selector wait failed (.base-card): ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
 
     const jobs = await page.evaluate(
       (limit: number) =>
-        Array.from(document.querySelectorAll(".job-search-card, .base-card, li"))
+        Array.from(document.querySelectorAll(".base-card"))
           .slice(0, limit)
           .map((card) => {
-            const title = card.querySelector(".base-search-card__title, h3")?.textContent?.trim() ?? "";
-            const company = card.querySelector(".base-search-card__subtitle, h4")?.textContent?.trim() ?? "";
-            const description = card.querySelector(".job-search-card__snippet, p")?.textContent?.trim() ?? "";
+            const title = card.querySelector("h3")?.textContent?.trim() ?? "";
+            const company = card.querySelector("h4")?.textContent?.trim() ?? "";
+            const description = card.querySelector(".base-search-card__metadata, .job-search-card__snippet, p")?.textContent?.trim() ?? "";
             const locationText = card.querySelector(".job-search-card__location")?.textContent?.trim() ?? "";
             const applyUrl = (card.querySelector("a.base-card__full-link, a") as HTMLAnchorElement | null)?.href?.trim() ?? "";
             return { title, company, description, locationText, applyUrl };
@@ -66,14 +82,12 @@ async function scrapeLinkedIn(browser: Browser, args: ScrapeJobsInput): Promise<
     return (jobs as ExtractedJob[]).map((job: ExtractedJob) => ({
       title: normalize(job.title),
       company: normalize(job.company),
-      description: normalize(job.description),
+      description: getDescriptionOrDefault(job),
       url: job.applyUrl,
       source: "linkedin",
       location: normalize(job.locationText || args.location || "Unknown"),
       email: extractEmail(job.description)
     }));
-  } catch {
-    return [];
   } finally {
     await page.close().catch(() => undefined);
   }
@@ -86,8 +100,16 @@ async function scrapeIndeed(browser: Browser, args: ScrapeJobsInput): Promise<Sc
     const location = encodeURIComponent(args.location ?? "");
     const url = `https://fr.indeed.com/jobs?q=${query}&l=${location}`;
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: DEFAULT_TIMEOUT_MS });
-    await page.waitForSelector(".job_seen_beacon, .result", { timeout: DEFAULT_TIMEOUT_MS }).catch(() => undefined);
+    await gotoAndStabilize(page, url);
+    await page
+      .waitForSelector(".job_seen_beacon, .result, [data-testid='slider_item']", { timeout: DEFAULT_TIMEOUT_MS })
+      .catch((error) => {
+        throw new Error(
+          `Indeed selector wait failed (.job_seen_beacon/.result/[data-testid='slider_item']): ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
 
     const jobs = await page.evaluate(
       (limit: number) =>
@@ -109,14 +131,12 @@ async function scrapeIndeed(browser: Browser, args: ScrapeJobsInput): Promise<Sc
     return (jobs as ExtractedJob[]).map((job: ExtractedJob) => ({
       title: normalize(job.title),
       company: normalize(job.company),
-      description: normalize(job.description),
+      description: getDescriptionOrDefault(job),
       url: job.applyUrl,
       source: "indeed",
       location: normalize(job.locationText || args.location || "Unknown"),
       email: extractEmail(job.description)
     }));
-  } catch {
-    return [];
   } finally {
     await page.close().catch(() => undefined);
   }
@@ -128,8 +148,14 @@ async function scrapeTanitJobs(browser: Browser, args: ScrapeJobsInput): Promise
     const query = encodeURIComponent(args.keywords);
     const url = `https://www.tanitjobs.com/jobs/?q=${query}`;
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: DEFAULT_TIMEOUT_MS });
-    await page.waitForSelector("article, .job-item, .search-results li", { timeout: DEFAULT_TIMEOUT_MS }).catch(() => undefined);
+    await gotoAndStabilize(page, url);
+    await page.waitForSelector("article, .job-item, .search-results li", { timeout: DEFAULT_TIMEOUT_MS }).catch((error) => {
+      throw new Error(
+        `TanitJobs selector wait failed (article/.job-item/.search-results li): ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    });
 
     const jobs = await page.evaluate(
       (limit: number) =>
@@ -150,31 +176,47 @@ async function scrapeTanitJobs(browser: Browser, args: ScrapeJobsInput): Promise
     return (jobs as ExtractedJob[]).map((job: ExtractedJob) => ({
       title: normalize(job.title),
       company: normalize(job.company || "Unknown company"),
-      description: normalize(job.description),
+      description: getDescriptionOrDefault(job),
       url: job.applyUrl,
       source: "tanitjobs",
       location: normalize(job.locationText || args.location || "Tunisie"),
       email: extractEmail(job.description)
     }));
-  } catch {
-    return [];
   } finally {
     await page.close().catch(() => undefined);
   }
 }
 
 export async function scrapeJobs(args: ScrapeJobsInput): Promise<ScrapedJob[]> {
-  if (!args.keywords.trim()) return [];
+  if (!args.keywords.trim()) {
+    console.warn("[scraper] missing keywords; skipping scraping");
+    return [];
+  }
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: false });
   try {
+    const runSource = async (source: "linkedin" | "tanitjobs" | "indeed", fn: () => Promise<ScrapedJob[]>): Promise<ScrapedJob[]> => {
+      console.log(`[scraper] starting ${source} scraping`);
+      try {
+        const jobs = await fn();
+        console.log(`[scraper] ${source} jobs found: ${jobs.length}`);
+        return jobs;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[scraper] ${source} scraping failed: ${message}`);
+        return [];
+      }
+    };
+
     const [linkedin, tanitJobs, indeed] = await Promise.all([
-      scrapeLinkedIn(browser, args),
-      scrapeTanitJobs(browser, args),
-      scrapeIndeed(browser, args)
+      runSource("linkedin", () => scrapeLinkedIn(browser, args)),
+      runSource("tanitjobs", () => scrapeTanitJobs(browser, args)),
+      runSource("indeed", () => scrapeIndeed(browser, args))
     ]);
 
-    return dedupe([...linkedin, ...tanitJobs, ...indeed]);
+    const merged = dedupe([...linkedin, ...tanitJobs, ...indeed]);
+    console.log(`[scraper] total deduped jobs: ${merged.length}`);
+    return merged;
   } finally {
     await browser.close().catch(() => undefined);
   }
