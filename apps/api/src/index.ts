@@ -45,10 +45,33 @@ const jobSearchSchema = z.object({
 });
 
 const envSchema = z.object({
-  STRIPE_SECRET_KEY: z.string().min(1),
-  STRIPE_WEBHOOK_SECRET: z.string().startsWith("whsec_"),
-  STRIPE_PRO_PRICE_ID: z.string().startsWith("price_"),
-  STRIPE_PREMIUM_PRICE_ID: z.string().startsWith("price_")
+  NODE_ENV: z.string().optional(),
+  STRIPE_SECRET_KEY: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  STRIPE_PRO_PRICE_ID: z.string().optional(),
+  STRIPE_PREMIUM_PRICE_ID: z.string().optional()
+}).superRefine((values, ctx) => {
+  const stripeConfigured =
+    Boolean(values.STRIPE_SECRET_KEY) ||
+    Boolean(values.STRIPE_WEBHOOK_SECRET) ||
+    Boolean(values.STRIPE_PRO_PRICE_ID) ||
+    Boolean(values.STRIPE_PREMIUM_PRICE_ID);
+  const stripeRequired = values.NODE_ENV === "production" || stripeConfigured;
+
+  if (!stripeRequired) return;
+
+  if (!values.STRIPE_SECRET_KEY) {
+    ctx.addIssue({ code: "custom", path: ["STRIPE_SECRET_KEY"], message: "STRIPE_SECRET_KEY is required when Stripe is enabled" });
+  }
+  if (!values.STRIPE_WEBHOOK_SECRET || !values.STRIPE_WEBHOOK_SECRET.startsWith("whsec_")) {
+    ctx.addIssue({ code: "custom", path: ["STRIPE_WEBHOOK_SECRET"], message: "STRIPE_WEBHOOK_SECRET must start with whsec_" });
+  }
+  if (!values.STRIPE_PRO_PRICE_ID || !values.STRIPE_PRO_PRICE_ID.startsWith("price_")) {
+    ctx.addIssue({ code: "custom", path: ["STRIPE_PRO_PRICE_ID"], message: "STRIPE_PRO_PRICE_ID must start with price_" });
+  }
+  if (!values.STRIPE_PREMIUM_PRICE_ID || !values.STRIPE_PREMIUM_PRICE_ID.startsWith("price_")) {
+    ctx.addIssue({ code: "custom", path: ["STRIPE_PREMIUM_PRICE_ID"], message: "STRIPE_PREMIUM_PRICE_ID must start with price_" });
+  }
 });
 const env = envSchema.parse(process.env);
 
@@ -90,7 +113,8 @@ app.use((req, res, next) => {
 const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
   const signatureHeader = req.headers["stripe-signature"];
   const signature = typeof signatureHeader === "string" ? signatureHeader : null;
-  if (!signature || !stripe) {
+  const webhookSecret = env.STRIPE_WEBHOOK_SECRET;
+  if (!signature || !stripe || !webhookSecret) {
     console.error("[Stripe webhook] Missing signature or Stripe client");
     res.status(400).json({ error: "Missing webhook configuration" });
     return;
@@ -98,7 +122,7 @@ const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
 
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(req.body as Buffer, signature, env.STRIPE_WEBHOOK_SECRET);
+    event = stripe.webhooks.constructEvent(req.body as Buffer, signature, webhookSecret);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error(`[Stripe webhook] Signature verification failed: ${message}`);
@@ -198,7 +222,12 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session): Promis
 
 async function handleSubscriptionCancelled(subscription: Stripe.Subscription): Promise<void> {
   const userId = subscription.metadata?.userId;
-  if (!userId) return;
+  if (!userId) {
+    console.warn("[Stripe webhook] customer.subscription.deleted: missing metadata.userId", {
+      subscriptionId: subscription.id
+    });
+    return;
+  }
 
   await prisma.user.update({
     where: { id: userId },
@@ -312,13 +341,12 @@ app.post("/stripe/checkout", async (req, res) => {
   const selectedPlan = parsed.data.plan;
   const priceId = PLAN_PRICE_MAP[selectedPlan];
   if (!priceId || !stripe) {
-    res.status(400).json({ error: "Invalid plan. Must be pro or premium." });
+    res.status(503).json({ error: "Stripe billing not configured or invalid plan selected." });
     return;
   }
 
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
-    payment_method_types: ["card"],
     customer: user.stripeCustomerId || undefined,
     customer_email: user.stripeCustomerId ? undefined : user.email,
     line_items: [{ price: priceId, quantity: 1 }],
