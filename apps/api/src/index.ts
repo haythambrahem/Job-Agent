@@ -10,10 +10,10 @@ import {
 } from "@job-agent/core";
 import { z } from "zod";
 import { prisma } from "./lib/prisma.js";
-import { stripe, resolvePlanFromPriceId } from "./lib/stripe.js";
+import { stripe, stripeEnabled, resolvePlanFromPriceId, STRIPE_PRICE_PREMIUM, STRIPE_PRICE_PRO } from "./lib/stripe.js";
 import { TaskQueue } from "./lib/queue.js";
 import { basicRateLimit } from "./middleware/rateLimit.js";
-import { authenticateRequest } from "./middleware/auth.js";
+import { requireAuth } from "./middleware/auth.js";
 import { validateSubscription } from "./middleware/subscription.js";
 
 const app = express();
@@ -155,7 +155,7 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.use(authenticateRequest);
+app.use(requireAuth);
 
 app.get("/subscription", async (req, res) => {
   const userId = req.user!.id;
@@ -177,6 +177,11 @@ app.get("/subscription", async (req, res) => {
 });
 
 app.post("/stripe/checkout", async (req, res) => {
+  if (!stripeEnabled) {
+    res.status(503).json({ error: "Stripe disabled in development" });
+    return;
+  }
+
   const schema = z.object({ plan: z.enum(["pro", "premium"]) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
@@ -192,9 +197,12 @@ app.post("/stripe/checkout", async (req, res) => {
   }
 
   const selectedPlan = parsed.data.plan;
-  const priceId = selectedPlan === "pro" ? process.env.STRIPE_PRICE_PRO : process.env.STRIPE_PRICE_PREMIUM;
+  const priceId = selectedPlan === "pro" ? STRIPE_PRICE_PRO : STRIPE_PRICE_PREMIUM;
   if (!priceId) {
-    res.status(500).json({ error: "Missing Stripe price configuration" });
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("Stripe disabled in development");
+    }
+    res.status(503).json({ error: "Stripe disabled in development" });
     return;
   }
 
@@ -217,6 +225,11 @@ app.post("/stripe/checkout", async (req, res) => {
 });
 
 app.post("/stripe/portal", async (req, res) => {
+  if (!stripeEnabled) {
+    res.status(503).json({ error: "Stripe disabled in development" });
+    return;
+  }
+
   const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
   if (!user?.stripeCustomerId) {
     res.status(400).json({ error: "No billing customer found" });
