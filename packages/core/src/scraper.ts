@@ -38,10 +38,10 @@ type ExtractedJob = {
   applyUrl: string;
 };
 
-function withDefaultDescription(job: ExtractedJob): string {
+function getDescriptionOrDefault(job: ExtractedJob): string {
   const normalizedDescription = normalize(job.description);
   if (normalizedDescription) return normalizedDescription;
-  return normalize(`${job.title} at ${job.company} ${job.locationText}`);
+  return normalize(`${job.title} at ${job.company} - ${job.locationText}`);
 }
 
 async function gotoAndStabilize(page: Awaited<ReturnType<Browser["newPage"]>>, url: string): Promise<void> {
@@ -78,7 +78,7 @@ async function scrapeLinkedIn(browser: Browser, args: ScrapeJobsInput): Promise<
     return (jobs as ExtractedJob[]).map((job: ExtractedJob) => ({
       title: normalize(job.title),
       company: normalize(job.company),
-      description: withDefaultDescription(job),
+      description: getDescriptionOrDefault(job),
       url: job.applyUrl,
       source: "linkedin",
       location: normalize(job.locationText || args.location || "Unknown"),
@@ -119,7 +119,7 @@ async function scrapeIndeed(browser: Browser, args: ScrapeJobsInput): Promise<Sc
     return (jobs as ExtractedJob[]).map((job: ExtractedJob) => ({
       title: normalize(job.title),
       company: normalize(job.company),
-      description: withDefaultDescription(job),
+      description: getDescriptionOrDefault(job),
       url: job.applyUrl,
       source: "indeed",
       location: normalize(job.locationText || args.location || "Unknown"),
@@ -158,7 +158,7 @@ async function scrapeTanitJobs(browser: Browser, args: ScrapeJobsInput): Promise
     return (jobs as ExtractedJob[]).map((job: ExtractedJob) => ({
       title: normalize(job.title),
       company: normalize(job.company || "Unknown company"),
-      description: withDefaultDescription(job),
+      description: getDescriptionOrDefault(job),
       url: job.applyUrl,
       source: "tanitjobs",
       location: normalize(job.locationText || args.location || "Tunisie"),
