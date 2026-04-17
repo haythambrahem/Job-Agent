@@ -28,6 +28,7 @@ const applicationQueue = new TaskQueue(2);
 const AUTO_APPLY_MIN_SCORE = 70;
 const AUTO_APPLY_LIMIT = 3;
 const AUTO_APPLY_DELAY_RANGE_MS = { min: 2000, max: 5000 };
+const FREE_PLAN_MONTHLY_LIMIT = 10;
 
 type AutoAppliedJob = { title: string; company: string; url: string; score: number; applicationId: string };
 type AutoApplySkippedJob = { title: string; company: string; url: string; score: number; reason: string };
@@ -218,7 +219,7 @@ app.get("/subscription", async (req, res) => {
   res.json({
     plan,
     usedApplications,
-    monthlyLimit: plan === "free" ? 10 : null,
+    monthlyLimit: plan === "free" ? FREE_PLAN_MONTHLY_LIMIT : null,
     subscriptionStatus: user?.subscriptionStatus || "inactive"
   });
 });
@@ -441,9 +442,12 @@ app.post("/applications/apply", async (req, res) => {
       console.error(`[applications] failed-to-count-usage user=${userId}`, error);
     }
 
-    if (monthlyCount >= 10) {
+    if (monthlyCount >= FREE_PLAN_MONTHLY_LIMIT) {
       console.log(`[applications] free-plan-limit-reached user=${userId} count=${monthlyCount}`);
-      res.status(403).json({ error: "Free plan limit reached (10 applications/month). Upgrade required.", monthlyLimit: 10 });
+      res.status(403).json({
+        error: `Free plan limit reached (${FREE_PLAN_MONTHLY_LIMIT} applications/month). Upgrade required.`,
+        monthlyLimit: FREE_PLAN_MONTHLY_LIMIT
+      });
       return;
     }
   }
