@@ -7,6 +7,10 @@ const stripePricePremium = process.env.STRIPE_PRICE_PREMIUM || "";
 const hasStripeSecret = stripeSecretKey.length > 0;
 const hasAnyPriceConfig = stripePricePro.length > 0 || stripePricePremium.length > 0;
 
+if (process.env.NODE_ENV === "production" && !hasStripeSecret) {
+  throw new Error("Missing STRIPE_SECRET_KEY");
+}
+
 if (process.env.NODE_ENV !== "production" && (!hasStripeSecret || !hasAnyPriceConfig)) {
   console.warn("Stripe disabled in development: missing STRIPE_SECRET_KEY or Stripe price configuration");
 }
@@ -15,9 +19,11 @@ export const stripeEnabled = hasStripeSecret && hasAnyPriceConfig;
 export const STRIPE_PRICE_PRO = stripePricePro;
 export const STRIPE_PRICE_PREMIUM = stripePricePremium;
 
-export const stripe = new Stripe(stripeSecretKey || "sk_test_disabled", {
-  apiVersion: "2025-06-30.basil"
-});
+export const stripe = hasStripeSecret
+  ? new Stripe(stripeSecretKey, {
+      apiVersion: "2025-06-30.basil"
+    })
+  : null;
 
 export function resolvePlanFromPriceId(priceId: string | null | undefined): "free" | "pro" | "premium" {
   if (!priceId) return "free";

@@ -39,7 +39,7 @@ app.use((req, res, next) => {
 
 app.post("/stripe/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const signature = req.headers["stripe-signature"];
-  if (!signature || !process.env.STRIPE_WEBHOOK_SECRET) {
+  if (!signature || !process.env.STRIPE_WEBHOOK_SECRET || !stripe) {
     res.status(400).send("Missing Stripe signature or secret");
     return;
   }
@@ -198,10 +198,7 @@ app.post("/stripe/checkout", async (req, res) => {
 
   const selectedPlan = parsed.data.plan;
   const priceId = selectedPlan === "pro" ? STRIPE_PRICE_PRO : STRIPE_PRICE_PREMIUM;
-  if (!priceId) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("Stripe disabled in development");
-    }
+  if (!priceId || !stripe) {
     res.status(503).json({ error: "Stripe disabled in development" });
     return;
   }
@@ -225,7 +222,7 @@ app.post("/stripe/checkout", async (req, res) => {
 });
 
 app.post("/stripe/portal", async (req, res) => {
-  if (!stripeEnabled) {
+  if (!stripeEnabled || !stripe) {
     res.status(503).json({ error: "Stripe disabled in development" });
     return;
   }
