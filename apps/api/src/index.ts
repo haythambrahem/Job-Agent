@@ -29,6 +29,9 @@ const AUTO_APPLY_MIN_SCORE = 70;
 const AUTO_APPLY_LIMIT = 3;
 const AUTO_APPLY_DELAY_RANGE_MS = { min: 2000, max: 5000 };
 
+type AutoAppliedJob = { title: string; company: string; url: string; score: number; applicationId: string };
+type AutoApplySkippedJob = { title: string; company: string; url: string; score: number; reason: string };
+
 const jobSearchSchema = z.object({
   keywords: z.string().min(1),
   location: z.string().optional(),
@@ -326,8 +329,8 @@ app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
       const candidates = rankedJobs.slice(0, AUTO_APPLY_LIMIT);
       console.log(`[auto-apply] selected jobs=${candidates.length}`);
 
-      const applied: Array<{ title: string; company: string; url: string; score: number; applicationId: string }> = [];
-      const skipped: Array<{ title: string; company: string; url: string; score: number; reason: string }> = [];
+      const applied: AutoAppliedJob[] = [];
+      const skipped: AutoApplySkippedJob[] = [];
 
       for (let index = 0; index < candidates.length; index += 1) {
         const job = candidates[index];
@@ -341,16 +344,16 @@ app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
         }
 
         try {
-          const application = await applicationQueue.enqueue(() =>
-            createPendingApplication(userId, {
+          const sent = await applicationQueue.enqueue(async () => {
+            const application = await createPendingApplication(userId, {
               company: job.company,
               title: job.title,
               recipientEmail: job.applyEmail,
               jobDescription: job.description,
               store
-            })
-          );
-          const sent = await applicationQueue.enqueue(() => approveAndSendApplication(userId, application.id, store));
+            });
+            return approveAndSendApplication(userId, application.id, store);
+          });
           applied.push({ title: job.title, company: job.company, url: job.url, score: job.score, applicationId: sent.id });
           console.log(`[auto-apply] sent application id=${sent.id}`);
         } catch (error: any) {

@@ -46,7 +46,7 @@ function parseMatchResponse(content: string): {
 
 export async function matchJobToCV(jobDescription: string, cvText: string, jobTitle?: string): Promise<MatchResult> {
   if (!groq) {
-    return { score: 0, reasons: ["GROQ_API_KEY not configured; unable to score match"], matchedSkills: [] };
+    throw new Error("GROQ_API_KEY not configured");
   }
 
   try {
