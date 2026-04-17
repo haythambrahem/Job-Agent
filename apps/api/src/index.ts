@@ -330,7 +330,8 @@ app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
       const skipped: Array<{ title: string; company: string; url: string; score: number; reason: string }> = [];
 
       for (let index = 0; index < candidates.length; index += 1) {
-        const job = candidates[index]!;
+        const job = candidates[index];
+        if (!job) continue;
         console.log(`[auto-apply] applying ${index + 1}/${candidates.length} title="${job.title}" score=${job.score}`);
 
         if (!job.applyEmail) {
