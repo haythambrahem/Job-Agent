@@ -4,6 +4,7 @@ export * from "./types.js";
 export * from "./cv.js";
 export * from "./scraper.js";
 export * from "./matcher.js";
+export * from "./ranking.js";
 export * from "./coverLetter.js";
 export * from "./email.js";
 export * from "./emailTemplate.js";

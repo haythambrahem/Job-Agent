@@ -1,6 +1,6 @@
-import type { Application, ScrapedJob } from "./types.js";
+import type { Application, RankedJob, ScrapedJob } from "./types.js";
 import { scrapeJobs, type ScrapeJobsInput } from "./scraper.js";
-import { matchJobToCV } from "./matcher.js";
+import { filterRankedJobs, rankJobsByCv } from "./ranking.js";
 import { generateCoverLetter, type CoverLetterContent } from "./coverLetter.js";
 import { sendEmail } from "./email.js";
 import { buildEmailHtml } from "./emailTemplate.js";
@@ -57,18 +57,14 @@ export async function scrapeMatchAndStoreJobs(
   userId: string,
   input: ScrapeJobsInput,
   store: PipelineStore,
-  minScore = 60
-): Promise<ScrapedJob[]> {
+  minScore = 70
+): Promise<RankedJob[]> {
   await store.createAIRun(userId, { type: "job_match", status: "started" });
 
   const jobs = await scrapeJobs(input);
   const cvText = (await store.getCvSummary(userId)) || DEFAULT_CV_SUMMARY;
-  const matched: ScrapedJob[] = [];
-
-  for (const job of jobs) {
-    const match = await matchJobToCV(job.description, cvText);
-    if (match.score >= minScore) matched.push(job);
-  }
+  const rankedJobs = await rankJobsByCv(jobs, cvText);
+  const matched = filterRankedJobs(rankedJobs, minScore);
 
   await store.saveJobs(
     userId,

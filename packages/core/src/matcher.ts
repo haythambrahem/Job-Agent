@@ -3,13 +3,70 @@ import type { MatchResult } from "./types.js";
 
 const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 
-export async function matchJobToCV(jobDescription: string, cvText: string): Promise<MatchResult> {
+const REQUIRED_SKILLS = [
+  { label: "Java", pattern: /\bjava\b/i },
+  { label: "Spring Boot", pattern: /\bspring\s*boot\b/i },
+  { label: "Angular", pattern: /\bangular\b/i },
+  { label: "APIs", pattern: /\bapi(s)?\b/i },
+  { label: "Docker", pattern: /\bdocker\b/i }
+];
+
+function mergeSkills(primary: string[], secondary: string[]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const skill of [...primary, ...secondary]) {
+    const trimmed = String(skill).trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(trimmed);
+  }
+  return merged;
+}
+
+function extractRequiredSkillMatches(jobText: string, cvText: string): string[] {
+  return REQUIRED_SKILLS.filter((skill) => skill.pattern.test(jobText) && skill.pattern.test(cvText)).map((skill) => skill.label);
+}
+
+function parseMatchResponse(content: string): {
+  score?: number;
+  reasons?: unknown;
+  matchedSkills?: unknown;
+  matched_skills?: unknown;
+} {
+  const match = content.match(/\{[\s\S]*\}/);
+  if (!match) return {};
+  try {
+    return JSON.parse(match[0]);
+  } catch {
+    return {};
+  }
+}
+
+export async function matchJobToCV(jobDescription: string, cvText: string, jobTitle?: string): Promise<MatchResult> {
   if (!groq) {
-    return { score: 75, reasons: ["GROQ_API_KEY not configured; using fallback score"], matchedSkills: [] };
+    throw new Error("GROQ_API_KEY environment variable is not configured. Set GROQ_API_KEY to enable CV matching.");
   }
 
   try {
-    const prompt = `Analyze if this job matches the candidate profile.\n\nJob:\n${jobDescription.slice(0, 800)}\n\nCV:\n${cvText.slice(0, 800)}\n\nReturn JSON only:\n{\"score\":number,\"reasons\":string[],\"matched_skills\":string[]}`;
+    const jobBlock = `${jobTitle ? `Title: ${jobTitle}\n` : ""}Description: ${jobDescription.slice(0, 1200)}`;
+    const prompt = `You are a CV-to-job matching engine. Compare the job with the candidate CV and return JSON only.
+
+Rules:
+- Output must be valid JSON with keys: score (0-100), matchedSkills (string[]), reasons (string[]).
+- Penalize irrelevant roles; use 0-69 for weak/no matches and 70-100 for strong matches.
+- Ensure matchedSkills includes any of these when present in both CV and job: Java, Spring Boot, Angular, APIs, Docker.
+- No markdown or extra text.
+
+Job:
+${jobBlock}
+
+CV:
+${cvText.slice(0, 1200)}
+
+Return JSON only.`;
+
     const response = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages: [{ role: "user", content: prompt }],
@@ -18,12 +75,18 @@ export async function matchJobToCV(jobDescription: string, cvText: string): Prom
     });
 
     const content = response.choices[0]?.message?.content || "{}";
-    const parsed = JSON.parse(content.match(/\{[\s\S]*\}/)?.[0] || "{}");
+    const parsed = parseMatchResponse(content);
+    const modelSkills = Array.isArray(parsed.matchedSkills)
+      ? parsed.matchedSkills.map(String)
+      : Array.isArray(parsed.matched_skills)
+        ? parsed.matched_skills.map(String)
+        : [];
+    const skillMatches = extractRequiredSkillMatches(`${jobTitle ?? ""} ${jobDescription}`, cvText);
 
     return {
       score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
       reasons: Array.isArray(parsed.reasons) ? parsed.reasons.map(String) : [],
-      matchedSkills: Array.isArray(parsed.matched_skills) ? parsed.matched_skills.map(String) : []
+      matchedSkills: mergeSkills(modelSkills, skillMatches)
     };
   } catch {
     return { score: 0, reasons: ["Unable to evaluate match"], matchedSkills: [] };
