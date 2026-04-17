@@ -56,8 +56,8 @@ const envSchema = z.object({
   }
   if (!values.STRIPE_WEBHOOK_SECRET) {
     ctx.addIssue({ code: "custom", path: ["STRIPE_WEBHOOK_SECRET"], message: "STRIPE_WEBHOOK_SECRET is required when Stripe is enabled" });
-  } else if (!values.STRIPE_WEBHOOK_SECRET.startsWith("whsec_")) {
-    ctx.addIssue({ code: "custom", path: ["STRIPE_WEBHOOK_SECRET"], message: "STRIPE_WEBHOOK_SECRET must start with whsec_" });
+  } else if (!values.STRIPE_WEBHOOK_SECRET.startsWith("whsec_") && !values.STRIPE_WEBHOOK_SECRET.startsWith("we_")) {
+    ctx.addIssue({ code: "custom", path: ["STRIPE_WEBHOOK_SECRET"], message: "STRIPE_WEBHOOK_SECRET must start with whsec_ or we_" });
   }
   if (!values.STRIPE_PRO_PRICE_ID) {
     ctx.addIssue({ code: "custom", path: ["STRIPE_PRO_PRICE_ID"], message: "STRIPE_PRO_PRICE_ID is required when Stripe is enabled" });
