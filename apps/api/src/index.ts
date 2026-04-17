@@ -53,6 +53,12 @@ function getCurrentMonthRange() {
   return { start, end };
 }
 
+function getFirstParam(value: string | string[] | undefined): string | null {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (Array.isArray(value) && value.length > 0) return value[0] || null;
+  return null;
+}
+
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.WEB_ORIGIN || "http://localhost:3000");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -484,7 +490,12 @@ app.post("/applications/apply", async (req, res) => {
 
 app.get("/applications/:id/preview", async (req, res) => {
   const userId = req.user!.id;
-  const application = await prisma.application.findFirst({ where: { id: req.params.id, userId } });
+  const applicationId = getFirstParam(req.params.id);
+  if (!applicationId) {
+    res.status(400).json({ error: "Invalid application id" });
+    return;
+  }
+  const application = await prisma.application.findFirst({ where: { id: applicationId, userId } });
   if (!application) {
     res.status(404).json({ error: "Application not found" });
     return;
@@ -502,10 +513,15 @@ app.get("/applications/:id/preview", async (req, res) => {
 
 app.post("/applications/:id/approve", requirePlan("pro"), async (req, res) => {
   const userId = req.user!.id;
+  const applicationId = getFirstParam(req.params.id);
+  if (!applicationId) {
+    res.status(400).json({ error: "Invalid application id" });
+    return;
+  }
   let current: { title: string; email: string | null } | null = null;
   try {
     current = await prisma.application.findFirst({
-      where: { id: req.params.id, userId },
+      where: { id: applicationId, userId },
       select: { title: true, email: true }
     });
     if (!current) {
@@ -518,7 +534,7 @@ app.post("/applications/:id/approve", requirePlan("pro"), async (req, res) => {
       return;
     }
 
-    const application = await applicationQueue.enqueue(() => approveAndSendApplication(userId, req.params.id, store));
+    const application = await applicationQueue.enqueue(() => approveAndSendApplication(userId, applicationId, store));
     res.json(application);
   } catch (error: any) {
     if (error?.message === "NO_RECIPIENT_EMAIL") {
@@ -532,7 +548,12 @@ app.post("/applications/:id/approve", requirePlan("pro"), async (req, res) => {
 app.post("/applications/:id/reject", requirePlan("pro"), async (req, res) => {
   try {
     const userId = req.user!.id;
-    const current = await prisma.application.findFirst({ where: { id: req.params.id, userId } });
+    const applicationId = getFirstParam(req.params.id);
+    if (!applicationId) {
+      res.status(400).json({ error: "Invalid application id" });
+      return;
+    }
+    const current = await prisma.application.findFirst({ where: { id: applicationId, userId } });
     if (!current) {
       res.status(404).json({ error: "Application not found" });
       return;
@@ -544,7 +565,7 @@ app.post("/applications/:id/reject", requirePlan("pro"), async (req, res) => {
     }
 
     const updated = await prisma.application.update({
-      where: { id_userId: { id: req.params.id, userId } },
+      where: { id_userId: { id: applicationId, userId } },
       data: { status: "rejected" }
     });
     res.json(updated);
