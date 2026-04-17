@@ -46,7 +46,7 @@ model Application {
   userId      String
   company     String
   title       String
-  email       String
+  email       String?
   coverLetter String
   status      String
   createdAt   DateTime @default(now())
@@ -66,6 +66,7 @@ model Job {
   company   String
   url       String
   source    String
+  applyEmail String?
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

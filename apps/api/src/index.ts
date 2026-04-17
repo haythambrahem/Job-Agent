@@ -120,11 +120,11 @@ app.use((req, _res, next) => {
 });
 
 const store = {
-  async saveJobs(userId: string, jobs: Array<{ title: string; company: string; url: string; source: string }>): Promise<void> {
+  async saveJobs(userId: string, jobs: Array<{ title: string; company: string; url: string; source: string; applyEmail?: string | null }>): Promise<void> {
     for (const job of jobs) {
       await prisma.job.upsert({
         where: { userId_url: { userId, url: job.url } },
-        update: { title: job.title, company: job.company, source: job.source },
+        update: { title: job.title, company: job.company, source: job.source, applyEmail: job.applyEmail ?? null },
         create: { ...job, userId }
       });
     }
@@ -134,7 +134,7 @@ const store = {
     input: {
       company: string;
       title: string;
-      email: string;
+      email?: string | null;
       coverLetter: string;
       status: "pending" | "approved" | "rejected" | "sent";
     }
@@ -293,11 +293,11 @@ app.get("/applications", async (req, res) => {
 });
 
 app.post("/applications/apply", async (req, res) => {
-  const schema = z.object({ jobId: z.string().min(1), email: z.string().email() });
+  const schema = z.object({ jobId: z.string().min(1), email: z.string().email().optional() });
   const parsed = schema.safeParse(req.body);
 
   if (!parsed.success) {
-    res.status(400).json({ error: "jobId and valid email are required" });
+    res.status(400).json({ error: "jobId must be a non-empty string and email must be valid when provided" });
     return;
   }
 
@@ -325,12 +325,28 @@ app.post("/applications/apply", async (req, res) => {
     return;
   }
 
+  const recipientEmail = parsed.data.email?.trim() || job.applyEmail || null;
+
+  if (!recipientEmail) {
+    res.status(422).json({ error: "NO_RECIPIENT_EMAIL", jobTitle: job.title });
+    return;
+  }
+
+  const trimmedEmail = parsed.data.email?.trim();
+
+  if (trimmedEmail && trimmedEmail !== job.applyEmail) {
+    await prisma.job.update({
+      where: { id: parsed.data.jobId },
+      data: { applyEmail: trimmedEmail }
+    }).catch(() => undefined);
+  }
+
   try {
     const application = await applicationQueue.enqueue(() =>
       createPendingApplication(userId, {
         company: job.company,
         title: job.title,
-        email: parsed.data.email,
+        recipientEmail,
         jobDescription: `Application for ${job.title} at ${job.company}. Source: ${job.source}. URL: ${job.url}`,
         store
       })
@@ -362,11 +378,30 @@ app.get("/applications/:id/preview", async (req, res) => {
 });
 
 app.post("/applications/:id/approve", async (req, res) => {
+  const userId = req.user!.id;
+  let current: { title: string; email: string | null } | null = null;
   try {
-    const userId = req.user!.id;
+    current = await prisma.application.findFirst({
+      where: { id: req.params.id, userId },
+      select: { title: true, email: true }
+    });
+    if (!current) {
+      res.status(404).json({ error: "Application not found" });
+      return;
+    }
+
+    if (!current.email) {
+      res.status(422).json({ error: "NO_RECIPIENT_EMAIL", jobTitle: current.title });
+      return;
+    }
+
     const application = await applicationQueue.enqueue(() => approveAndSendApplication(userId, req.params.id, store));
     res.json(application);
   } catch (error: any) {
+    if (error?.message === "NO_RECIPIENT_EMAIL") {
+      res.status(422).json({ error: "NO_RECIPIENT_EMAIL", jobTitle: current?.title || "Unknown role" });
+      return;
+    }
     res.status(400).json({ error: error?.message || "approval failed" });
   }
 });

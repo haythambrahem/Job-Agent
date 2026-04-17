@@ -1,4 +1,4 @@
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import type { ScrapedJob } from "./types.js";
 
 export interface ScrapeJobsInput {
@@ -13,11 +13,6 @@ const SCRAPE_DELAY_MS = 2_500;
 
 function normalize(value: string): string {
   return value.replace(/\s+/g, " ").trim();
-}
-
-function extractEmail(text: string): string | undefined {
-  const match = text.match(/[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}/);
-  return match?.[0];
 }
 
 function dedupe(jobs: ScrapedJob[]): ScrapedJob[] {
@@ -47,6 +42,17 @@ function getDescriptionOrDefault(job: ExtractedJob): string {
 async function gotoAndStabilize(page: Awaited<ReturnType<Browser["newPage"]>>, url: string): Promise<void> {
   await page.goto(url, { waitUntil: "networkidle", timeout: DEFAULT_TIMEOUT_MS });
   await page.waitForTimeout(SCRAPE_DELAY_MS);
+}
+
+async function extractApplyEmail(page: Page): Promise<string | null> {
+  const mailtoHref = await page
+    .$eval("a[href^=\"mailto:\"]", (el) => el.getAttribute("href"))
+    .catch(() => null);
+  if (mailtoHref) return mailtoHref.replace("mailto:", "").split("?")[0].trim();
+
+  const bodyText = await page.innerText("body").catch(() => "");
+  const match = bodyText.match(/[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}/);
+  return match ? match[0] : null;
 }
 
 async function scrapeLinkedIn(browser: Browser, args: ScrapeJobsInput): Promise<ScrapedJob[]> {
@@ -79,15 +85,37 @@ async function scrapeLinkedIn(browser: Browser, args: ScrapeJobsInput): Promise<
       args.limitPerSource ?? DEFAULT_LIMIT_PER_SOURCE
     );
 
-    return (jobs as ExtractedJob[]).map((job: ExtractedJob) => ({
-      title: normalize(job.title),
-      company: normalize(job.company),
-      description: getDescriptionOrDefault(job),
-      url: job.applyUrl,
-      source: "linkedin",
-      location: normalize(job.locationText || args.location || "Unknown"),
-      email: extractEmail(job.description)
-    }));
+    const enrichedJobs: ScrapedJob[] = [];
+
+    for (const job of jobs as ExtractedJob[]) {
+      let description = getDescriptionOrDefault(job);
+      let applyEmail: string | null = null;
+
+      try {
+        await gotoAndStabilize(page, job.applyUrl);
+        const detailDescription = await page
+          .innerText(".show-more-less-html__markup, .description__text, .jobs-description__content")
+          .catch(() => "");
+        if (normalize(detailDescription)) {
+          description = normalize(detailDescription);
+        }
+        applyEmail = await extractApplyEmail(page);
+      } catch {
+        applyEmail = null;
+      }
+
+      enrichedJobs.push({
+        title: normalize(job.title),
+        company: normalize(job.company),
+        description,
+        url: job.applyUrl,
+        source: "linkedin",
+        location: normalize(job.locationText || args.location || "Unknown"),
+        applyEmail
+      });
+    }
+
+    return enrichedJobs;
   } finally {
     await page.close().catch(() => undefined);
   }
@@ -134,8 +162,7 @@ async function scrapeIndeed(browser: Browser, args: ScrapeJobsInput): Promise<Sc
       description: getDescriptionOrDefault(job),
       url: job.applyUrl,
       source: "indeed",
-      location: normalize(job.locationText || args.location || "Unknown"),
-      email: extractEmail(job.description)
+      location: normalize(job.locationText || args.location || "Unknown")
     }));
   } finally {
     await page.close().catch(() => undefined);
@@ -179,8 +206,7 @@ async function scrapeTanitJobs(browser: Browser, args: ScrapeJobsInput): Promise
       description: getDescriptionOrDefault(job),
       url: job.applyUrl,
       source: "tanitjobs",
-      location: normalize(job.locationText || args.location || "Tunisie"),
-      email: extractEmail(job.description)
+      location: normalize(job.locationText || args.location || "Tunisie")
     }));
   } finally {
     await page.close().catch(() => undefined);

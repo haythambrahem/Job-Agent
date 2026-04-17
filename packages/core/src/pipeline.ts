@@ -1,15 +1,16 @@
 import type { Application, ScrapedJob } from "./types.js";
 import { scrapeJobs, type ScrapeJobsInput } from "./scraper.js";
 import { matchJobToCV } from "./matcher.js";
-import { generateCoverLetter } from "./coverLetter.js";
+import { generateCoverLetter, type CoverLetterContent } from "./coverLetter.js";
 import { sendEmail } from "./email.js";
+import { buildEmailHtml } from "./emailTemplate.js";
 
 export interface PipelineStore {
-  saveJobs(userId: string, jobs: Array<{ title: string; company: string; url: string; source: string }>): Promise<void>;
+  saveJobs(userId: string, jobs: Array<{ title: string; company: string; url: string; source: string; applyEmail?: string | null }>): Promise<void>;
   createApplication(userId: string, input: {
     company: string;
     title: string;
-    email: string;
+    email?: string | null;
     coverLetter: string;
     status: "pending" | "approved" | "rejected" | "sent";
   }): Promise<Application>;
@@ -20,6 +21,37 @@ export interface PipelineStore {
 }
 
 const DEFAULT_CV_SUMMARY = "Développeur full-stack, Java, Spring Boot, Angular, 3 ans d'expérience";
+const DEFAULT_CV_PDF_PATH = "./assets/cv-haytham-brahem.pdf";
+
+function serializeCoverLetter(content: CoverLetterContent): string {
+  return JSON.stringify(content);
+}
+
+function fallbackCoverLetterContent(application: Application): CoverLetterContent {
+  return {
+    subject: `Application for ${application.title} — Haytham Brahem`,
+    opening: `Dear Hiring Manager at ${application.company},`,
+    body: application.coverLetter,
+    closing: "Thank you for your time and consideration."
+  };
+}
+
+function deserializeCoverLetter(application: Application): CoverLetterContent {
+  try {
+    const parsed = JSON.parse(application.coverLetter) as Partial<CoverLetterContent>;
+    if (typeof parsed.subject === "string" && typeof parsed.opening === "string" && typeof parsed.body === "string" && typeof parsed.closing === "string") {
+      return {
+        subject: parsed.subject,
+        opening: parsed.opening,
+        body: parsed.body,
+        closing: parsed.closing
+      };
+    }
+  } catch {
+    // fallback below
+  }
+  return fallbackCoverLetterContent(application);
+}
 
 export async function scrapeMatchAndStoreJobs(
   userId: string,
@@ -44,7 +76,8 @@ export async function scrapeMatchAndStoreJobs(
       title: job.title,
       company: job.company,
       url: job.url,
-      source: job.source
+      source: job.source,
+      applyEmail: job.applyEmail ?? null
     }))
   );
 
@@ -55,7 +88,7 @@ export async function scrapeMatchAndStoreJobs(
 export async function createPendingApplication(userId: string, input: {
   company: string;
   title: string;
-  email: string;
+  recipientEmail?: string | null;
   jobDescription: string;
   store: PipelineStore;
 }): Promise<Application> {
@@ -70,8 +103,8 @@ export async function createPendingApplication(userId: string, input: {
   return input.store.createApplication(userId, {
     company: input.company,
     title: input.title,
-    email: input.email,
-    coverLetter,
+    email: input.recipientEmail ?? null,
+    coverLetter: serializeCoverLetter(coverLetter),
     status: "pending"
   });
 }
@@ -84,11 +117,19 @@ export async function approveAndSendApplication(userId: string, id: string, stor
     throw new Error("Application must be approved before sending");
   }
 
+  if (!approved.email) {
+    const noRecipientError = new Error("NO_RECIPIENT_EMAIL");
+    noRecipientError.name = "NoRecipientEmailError";
+    throw noRecipientError;
+  }
+
+  const content = deserializeCoverLetter(approved);
+
   await sendEmail({
-    toEmail: approved.email,
-    company: approved.company,
-    jobTitle: approved.title,
-    coverLetter: approved.coverLetter
+    to: approved.email,
+    subject: content.subject,
+    htmlBody: buildEmailHtml(content),
+    cvPdfPath: process.env.CV_PDF_PATH || DEFAULT_CV_PDF_PATH
   });
 
   return store.updateApplicationStatus(userId, id, "sent");
