@@ -37,7 +37,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.post("/stripe/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
   const signature = req.headers["stripe-signature"];
   if (!signature || !process.env.STRIPE_WEBHOOK_SECRET || !stripe) {
     res.status(400).send("Missing Stripe signature or secret");
@@ -55,10 +55,10 @@ app.post("/stripe/webhook", express.raw({ type: "application/json" }), async (re
   try {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
-      const userId = session.client_reference_id;
+      const userId = session.metadata?.userId || session.client_reference_id;
       const customerId = typeof session.customer === "string" ? session.customer : null;
       const subscriptionId = typeof session.subscription === "string" ? session.subscription : null;
-      const plan = (session.metadata?.plan as "pro" | "premium" | undefined) || "free";
+      const plan = (session.metadata?.plan as "pro" | "premium" | undefined) || "pro";
 
       if (userId) {
         await prisma.user.update({
@@ -70,6 +70,7 @@ app.post("/stripe/webhook", express.raw({ type: "application/json" }), async (re
             subscriptionStatus: "active"
           }
         });
+        console.log(`[stripe] checkout.session.completed user=${userId} plan=${plan}`);
       }
     }
 
@@ -97,6 +98,7 @@ app.post("/stripe/webhook", express.raw({ type: "application/json" }), async (re
                     : "canceled"
           }
         });
+        console.log(`[stripe] ${event.type} customer=${customerId} status=${status} plan=${plan}`);
       }
     }
 
@@ -104,7 +106,10 @@ app.post("/stripe/webhook", express.raw({ type: "application/json" }), async (re
   } catch {
     res.status(500).json({ error: "webhook handling failed" });
   }
-});
+};
+
+app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
+app.post("/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
 
 app.use(express.json({ limit: "200kb" }));
 app.use(basicRateLimit);
@@ -211,7 +216,7 @@ app.post("/stripe/checkout", async (req, res) => {
     success_url: `${process.env.WEB_ORIGIN || "http://localhost:3000"}/dashboard?billing=success`,
     cancel_url: `${process.env.WEB_ORIGIN || "http://localhost:3000"}/dashboard?billing=cancel`,
     client_reference_id: user.id,
-    metadata: { plan: selectedPlan }
+    metadata: { userId: user.id, plan: selectedPlan }
   });
 
   if (typeof session.customer === "string" && !user.stripeCustomerId) {
@@ -308,6 +313,7 @@ app.post("/applications/apply", async (req, res) => {
     const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
     const monthlyCount = await prisma.application.count({ where: { userId, createdAt: { gte: monthStart } } });
     if (monthlyCount >= 10) {
+      console.log(`[applications] free-plan-limit-reached user=${userId} count=${monthlyCount}`);
       res.status(403).json({ error: "Free plan limit reached", monthlyLimit: 10 });
       return;
     }
