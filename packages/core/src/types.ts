@@ -21,6 +21,8 @@ export interface MatchResult {
   matchedSkills: string[];
 }
 
+export interface RankedJob extends ScrapedJob, MatchResult {}
+
 export interface Application {
   id: string;
   userId?: string;

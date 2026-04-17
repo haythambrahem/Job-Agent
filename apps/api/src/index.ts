@@ -14,7 +14,7 @@ import { stripe, stripeEnabled, resolvePlanFromPriceId, STRIPE_PRICE_PREMIUM, ST
 import { TaskQueue } from "./lib/queue.js";
 import { basicRateLimit } from "./middleware/rateLimit.js";
 import { requireAuth } from "./middleware/auth.js";
-import { validateSubscription } from "./middleware/subscription.js";
+import { requirePlan } from "./middleware/subscription.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -24,6 +24,24 @@ const io = new Server(server, {
 
 const searchQueue = new TaskQueue(2);
 const applicationQueue = new TaskQueue(2);
+
+const AUTO_APPLY_MIN_SCORE = 70;
+const AUTO_APPLY_LIMIT = 3;
+const AUTO_APPLY_DELAY_RANGE_MS = { min: 2000, max: 5000 };
+
+const jobSearchSchema = z.object({
+  keywords: z.string().min(1),
+  location: z.string().optional(),
+  limitPerSource: z.number().int().min(1).max(20).optional()
+});
+
+function randomInt(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.WEB_ORIGIN || "http://localhost:3000");
@@ -251,13 +269,8 @@ app.get("/jobs", async (req, res) => {
   res.json(jobs);
 });
 
-app.post("/jobs/search", validateSubscription("pro"), async (req, res) => {
-  const schema = z.object({
-    keywords: z.string().min(1),
-    location: z.string().optional(),
-    limitPerSource: z.number().int().min(1).max(20).optional()
-  });
-  const parsed = schema.safeParse(req.body);
+app.post("/jobs/search", requirePlan("pro"), async (req, res) => {
+  const parsed = jobSearchSchema.safeParse(req.body);
 
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid search payload" });
@@ -275,12 +288,89 @@ app.post("/jobs/search", validateSubscription("pro"), async (req, res) => {
           location: parsed.data.location,
           limitPerSource: parsed.data.limitPerSource ?? 5
         },
-        store
+        store,
+        AUTO_APPLY_MIN_SCORE
       )
     );
     res.json({ jobs });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "job search failed" });
+  }
+});
+
+app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
+  const parsed = jobSearchSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid auto-apply payload" });
+    return;
+  }
+
+  const userId = req.user!.id;
+
+  try {
+    const result = await searchQueue.enqueue(async () => {
+      console.log(`[auto-apply] start user=${userId} keywords="${parsed.data.keywords}"`);
+      const rankedJobs = await scrapeMatchAndStoreJobs(
+        userId,
+        {
+          keywords: parsed.data.keywords,
+          location: parsed.data.location,
+          limitPerSource: parsed.data.limitPerSource ?? 5
+        },
+        store,
+        AUTO_APPLY_MIN_SCORE
+      );
+      console.log(`[auto-apply] ranked jobs=${rankedJobs.length}`);
+
+      const candidates = rankedJobs.slice(0, AUTO_APPLY_LIMIT);
+      console.log(`[auto-apply] selected jobs=${candidates.length}`);
+
+      const applied: Array<{ title: string; company: string; url: string; score: number; applicationId: string }> = [];
+      const skipped: Array<{ title: string; company: string; url: string; score: number; reason: string }> = [];
+
+      for (let index = 0; index < candidates.length; index += 1) {
+        const job = candidates[index]!;
+        console.log(`[auto-apply] applying ${index + 1}/${candidates.length} title="${job.title}" score=${job.score}`);
+
+        if (!job.applyEmail) {
+          console.log(`[auto-apply] skip missing email title="${job.title}"`);
+          skipped.push({ title: job.title, company: job.company, url: job.url, score: job.score, reason: "missing_apply_email" });
+          continue;
+        }
+
+        try {
+          const application = await applicationQueue.enqueue(() =>
+            createPendingApplication(userId, {
+              company: job.company,
+              title: job.title,
+              recipientEmail: job.applyEmail,
+              jobDescription: job.description,
+              store
+            })
+          );
+          const sent = await applicationQueue.enqueue(() => approveAndSendApplication(userId, application.id, store));
+          applied.push({ title: job.title, company: job.company, url: job.url, score: job.score, applicationId: sent.id });
+          console.log(`[auto-apply] sent application id=${sent.id}`);
+        } catch (error: any) {
+          console.log(`[auto-apply] failed title="${job.title}" error="${error?.message || "unknown"}"`);
+          skipped.push({ title: job.title, company: job.company, url: job.url, score: job.score, reason: "apply_failed" });
+        }
+
+        if (index < candidates.length - 1) {
+          const delayMs = randomInt(AUTO_APPLY_DELAY_RANGE_MS.min, AUTO_APPLY_DELAY_RANGE_MS.max);
+          console.log(`[auto-apply] waiting ${delayMs}ms before next application`);
+          await delay(delayMs);
+        }
+      }
+
+      console.log(`[auto-apply] completed applied=${applied.length} skipped=${skipped.length}`);
+      return { rankedJobs, applied, skipped };
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "auto-apply failed" });
   }
 });
 
@@ -292,7 +382,7 @@ app.get("/applications", async (req, res) => {
   res.json(applications);
 });
 
-app.post("/applications/apply", async (req, res) => {
+app.post("/applications/apply", requirePlan("pro"), async (req, res) => {
   const schema = z.object({ jobId: z.string().min(1), email: z.string().email().optional() });
   const parsed = schema.safeParse(req.body);
 
@@ -377,7 +467,7 @@ app.get("/applications/:id/preview", async (req, res) => {
   });
 });
 
-app.post("/applications/:id/approve", async (req, res) => {
+app.post("/applications/:id/approve", requirePlan("pro"), async (req, res) => {
   const userId = req.user!.id;
   let current: { title: string; email: string | null } | null = null;
   try {
@@ -406,7 +496,7 @@ app.post("/applications/:id/approve", async (req, res) => {
   }
 });
 
-app.post("/applications/:id/reject", async (req, res) => {
+app.post("/applications/:id/reject", requirePlan("pro"), async (req, res) => {
   try {
     const userId = req.user!.id;
     const current = await prisma.application.findFirst({ where: { id: req.params.id, userId } });

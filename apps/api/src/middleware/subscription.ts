@@ -38,3 +38,7 @@ export function validateSubscription(minimumPlan: Plan) {
     next();
   };
 }
+
+export function requirePlan(minimumPlan: Plan) {
+  return validateSubscription(minimumPlan);
+}
