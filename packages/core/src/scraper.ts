@@ -41,7 +41,7 @@ type ExtractedJob = {
 function withDefaultDescription(job: ExtractedJob): string {
   const normalizedDescription = normalize(job.description);
   if (normalizedDescription) return normalizedDescription;
-  return normalize(`${job.title} at ${job.company} ${job.locationText}`.trim());
+  return normalize(`${job.title} at ${job.company} ${job.locationText}`);
 }
 
 async function gotoAndStabilize(page: Awaited<ReturnType<Browser["newPage"]>>, url: string): Promise<void> {
@@ -190,9 +190,11 @@ export async function scrapeJobs(args: ScrapeJobsInput): Promise<ScrapedJob[]> {
       }
     };
 
-    const linkedin = await runSource("linkedin", () => scrapeLinkedIn(browser, args));
-    const tanitJobs = await runSource("tanitjobs", () => scrapeTanitJobs(browser, args));
-    const indeed = await runSource("indeed", () => scrapeIndeed(browser, args));
+    const [linkedin, tanitJobs, indeed] = await Promise.all([
+      runSource("linkedin", () => scrapeLinkedIn(browser, args)),
+      runSource("tanitjobs", () => scrapeTanitJobs(browser, args)),
+      runSource("indeed", () => scrapeIndeed(browser, args))
+    ]);
 
     const merged = dedupe([...linkedin, ...tanitJobs, ...indeed]);
     console.log(`[scraper] total deduped jobs: ${merged.length}`);
