@@ -57,7 +57,11 @@ async function scrapeLinkedIn(browser: Browser, args: ScrapeJobsInput): Promise<
     const url = `https://www.linkedin.com/jobs/search/?keywords=${query}&location=${location}`;
 
     await gotoAndStabilize(page, url);
-    await page.waitForSelector(".base-card", { timeout: DEFAULT_TIMEOUT_MS });
+    await page.waitForSelector(".base-card", { timeout: DEFAULT_TIMEOUT_MS }).catch((error) => {
+      throw new Error(
+        `LinkedIn selector wait failed (.base-card): ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
 
     const jobs = await page.evaluate(
       (limit: number) =>
@@ -97,7 +101,15 @@ async function scrapeIndeed(browser: Browser, args: ScrapeJobsInput): Promise<Sc
     const url = `https://fr.indeed.com/jobs?q=${query}&l=${location}`;
 
     await gotoAndStabilize(page, url);
-    await page.waitForSelector(".job_seen_beacon, .result, [data-testid='slider_item']", { timeout: DEFAULT_TIMEOUT_MS });
+    await page
+      .waitForSelector(".job_seen_beacon, .result, [data-testid='slider_item']", { timeout: DEFAULT_TIMEOUT_MS })
+      .catch((error) => {
+        throw new Error(
+          `Indeed selector wait failed (.job_seen_beacon/.result/[data-testid='slider_item']): ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
 
     const jobs = await page.evaluate(
       (limit: number) =>
@@ -137,7 +149,13 @@ async function scrapeTanitJobs(browser: Browser, args: ScrapeJobsInput): Promise
     const url = `https://www.tanitjobs.com/jobs/?q=${query}`;
 
     await gotoAndStabilize(page, url);
-    await page.waitForSelector("article, .job-item, .search-results li", { timeout: DEFAULT_TIMEOUT_MS });
+    await page.waitForSelector("article, .job-item, .search-results li", { timeout: DEFAULT_TIMEOUT_MS }).catch((error) => {
+      throw new Error(
+        `TanitJobs selector wait failed (article/.job-item/.search-results li): ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    });
 
     const jobs = await page.evaluate(
       (limit: number) =>
