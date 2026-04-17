@@ -4,6 +4,8 @@ import { encode } from "next-auth/jwt";
 import DashboardClient from "@/components/DashboardClient";
 import { authOptions } from "@/lib/auth";
 
+const API_TOKEN_MAX_AGE_SECONDS = 60 * 60;
+
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
 
@@ -22,7 +24,7 @@ export default async function DashboardPage() {
       plan: session.user.plan
     },
     secret: process.env.NEXTAUTH_SECRET,
-    maxAge: 60 * 60
+    maxAge: API_TOKEN_MAX_AGE_SECONDS
   });
 
   return (
