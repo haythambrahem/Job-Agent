@@ -21,7 +21,7 @@ function fallbackCoverLetter(input: GenerateCoverLetterInput): CoverLetterConten
 }
 
 function parseCoverLetterContent(raw: string, input: GenerateCoverLetterInput): CoverLetterContent {
-  const trimmed = raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/, "");
+  const trimmed = raw.trim().replace(/^```(?:json)?\s*|\s*```$/gi, "");
 
   try {
     const parsed = JSON.parse(trimmed) as Partial<CoverLetterContent>;

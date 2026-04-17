@@ -297,7 +297,7 @@ app.post("/applications/apply", async (req, res) => {
   const parsed = schema.safeParse(req.body);
 
   if (!parsed.success) {
-    res.status(400).json({ error: "jobId is required and email must be valid when provided" });
+    res.status(400).json({ error: "jobId must be a non-empty string and email must be valid when provided" });
     return;
   }
 
@@ -332,10 +332,12 @@ app.post("/applications/apply", async (req, res) => {
     return;
   }
 
-  if (parsed.data.email?.trim() && parsed.data.email !== job.applyEmail) {
+  const trimmedEmail = parsed.data.email?.trim();
+
+  if (trimmedEmail && trimmedEmail !== job.applyEmail) {
     await prisma.job.update({
       where: { id: parsed.data.jobId },
-      data: { applyEmail: parsed.data.email.trim() }
+      data: { applyEmail: trimmedEmail }
     }).catch(() => undefined);
   }
 
@@ -376,9 +378,13 @@ app.get("/applications/:id/preview", async (req, res) => {
 });
 
 app.post("/applications/:id/approve", async (req, res) => {
+  const userId = req.user!.id;
+  let current: { title: string; email: string | null } | null = null;
   try {
-    const userId = req.user!.id;
-    const current = await prisma.application.findFirst({ where: { id: req.params.id, userId } });
+    current = await prisma.application.findFirst({
+      where: { id: req.params.id, userId },
+      select: { title: true, email: true }
+    });
     if (!current) {
       res.status(404).json({ error: "Application not found" });
       return;
@@ -393,8 +399,6 @@ app.post("/applications/:id/approve", async (req, res) => {
     res.json(application);
   } catch (error: any) {
     if (error?.message === "NO_RECIPIENT_EMAIL") {
-      const userId = req.user!.id;
-      const current = await prisma.application.findFirst({ where: { id: req.params.id, userId } });
       res.status(422).json({ error: "NO_RECIPIENT_EMAIL", jobTitle: current?.title || "Unknown role" });
       return;
     }

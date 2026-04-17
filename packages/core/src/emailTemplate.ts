@@ -26,7 +26,7 @@ function escapeHtml(value: string): string {
 
 export function buildEmailHtml(content: CoverLetterContent): string {
   const bodyParagraphs = content.body
-    .split(/\n\s*\n/)
+    .split(/\r?\n\s*\r?\n/)
     .map((paragraph) => paragraph.trim())
     .filter(Boolean)
     .map((paragraph) => `<p style="margin:0 0 16px 0;">${escapeHtml(paragraph)}</p>`)

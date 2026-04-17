@@ -3,6 +3,8 @@ import readline from "node:readline";
 import path from "node:path";
 import { google } from "googleapis";
 
+const MIME_BASE64_LINE_LENGTH = 76;
+
 async function getAuth() {
   const credentialsPath = process.env.GMAIL_CREDENTIALS_PATH || "credentials.json";
   const tokenPath = process.env.GMAIL_TOKEN_PATH || "token.json";
@@ -32,27 +34,24 @@ async function getAuth() {
 }
 
 function toBase64Url(value: string | Buffer): string {
-  return Buffer.from(value)
+  let encoded = Buffer.from(value)
     .toString("base64")
     .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
+    .replace(/\//g, "_");
+
+  while (encoded.endsWith("=")) {
+    encoded = encoded.slice(0, -1);
+  }
+
+  return encoded;
 }
 
-function buildPlainTextFromHtml(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, "\"")
-    .replace(/&#39;/g, "'")
-    .trim();
+function chunkBase64(value: string): string {
+  const chunks: string[] = [];
+  for (let i = 0; i < value.length; i += MIME_BASE64_LINE_LENGTH) {
+    chunks.push(value.slice(i, i + MIME_BASE64_LINE_LENGTH));
+  }
+  return chunks.join("\r\n");
 }
 
 export async function sendEmail(opts: {
@@ -63,12 +62,18 @@ export async function sendEmail(opts: {
 }): Promise<void> {
   const auth = await getAuth();
   const gmail = google.gmail({ version: "v1", auth });
-  const mixedBoundary = `mix_${Date.now().toString(16)}`;
-  const altBoundary = `alt_${Date.now().toString(16)}`;
+  const nonce = Math.random().toString(36).slice(2);
+  const mixedBoundary = `mix_${Date.now().toString(16)}_${nonce}`;
+  const altBoundary = `alt_${Date.now().toString(16)}_${nonce}`;
   const resolvedPdfPath = path.resolve(opts.cvPdfPath);
-  const cvPdf = fs.readFileSync(resolvedPdfPath);
+  let cvPdf: Buffer;
+  try {
+    cvPdf = fs.readFileSync(resolvedPdfPath);
+  } catch {
+    throw new Error(`CV PDF file not found at ${resolvedPdfPath}`);
+  }
   const cvPdfName = path.basename(resolvedPdfPath);
-  const plainText = buildPlainTextFromHtml(opts.htmlBody);
+  const plainText = "Please view this application message in an HTML-capable email client.";
 
   const rawMessage = [
     `To: ${opts.to}`,
@@ -98,7 +103,7 @@ export async function sendEmail(opts: {
     "Content-Transfer-Encoding: base64",
     `Content-Disposition: attachment; filename="${cvPdfName}"`,
     "",
-    cvPdf.toString("base64").replace(/(.{76})/g, "$1\r\n"),
+    chunkBase64(cvPdf.toString("base64")),
     "",
     `--${mixedBoundary}--`
   ].join("\r\n");
