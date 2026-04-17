@@ -13,5 +13,8 @@
     "build": "npm run build --workspace @job-agent/core && npm run build --workspace @job-agent/api && npm run build --workspace @job-agent/web",
     "db:generate": "npm run db:generate --workspace @job-agent/api",
     "db:push": "npm run db:push --workspace @job-agent/api"
+  },
+  "dependencies": {
+    "pino-pretty": "^13.1.3"
   }
 }

@@ -85,7 +85,10 @@ class CircuitBreaker {
 
 const logger = pino({
   name: "job-scraper",
-  level: process.env.LOG_LEVEL || "info"
+  level: process.env.LOG_LEVEL || "info",
+  transport: {
+    target: "pino-pretty",
+  },
 });
 
 function nowMs(): number {

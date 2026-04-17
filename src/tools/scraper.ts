@@ -18,7 +18,7 @@ export interface ScraperArgs {
   limitPerSource?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_LIMIT_PER_SOURCE = 10;
 const DEFAULT_LOCATION = "Non spécifiée";
 const DEFAULT_TUNISIA_LOCATION = "Tunisie";
