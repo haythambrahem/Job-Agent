@@ -36,6 +36,7 @@ packages/
 - `WEB_ORIGIN`
 - `NEXTAUTH_SECRET`
 - `STRIPE_SECRET_KEY`
+- `STRIPE_PRICE_ID` (single-price fallback, useful in development)
 - `STRIPE_WEBHOOK_SECRET`
 - `STRIPE_PRICE_PRO`
 - `STRIPE_PRICE_PREMIUM`

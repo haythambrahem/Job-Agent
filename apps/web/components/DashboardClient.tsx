@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { signOut } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 
 type Page = "dashboard" | "jobs" | "applications";
 type ApplicationStatus = "pending" | "approved" | "rejected" | "sent";
@@ -34,12 +34,11 @@ type Subscription = {
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
 
 export default function DashboardClient({
-  user,
-  accessToken
+  user
 }: {
   user: { id: string; email: string; plan: "free" | "pro" | "premium" };
-  accessToken: string | null;
 }) {
+  const { data: session } = useSession();
   const [page, setPage] = useState<Page>("dashboard");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -51,14 +50,19 @@ export default function DashboardClient({
 
   const pendingCount = useMemo(() => applications.filter((a) => a.status === "pending").length, [applications]);
   const sentCount = useMemo(() => applications.filter((a) => a.status === "sent").length, [applications]);
+  const userId = session?.user?.id;
 
   async function apiCall<T>(path: string, init?: RequestInit): Promise<T> {
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
+
     const response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
       credentials: "include",
       headers: {
         "Content-Type": "application/json",
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        Authorization: `Bearer ${userId}`,
         ...(init?.headers || {})
       }
     });
@@ -153,8 +157,12 @@ export default function DashboardClient({
   }
 
   useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
     refresh().catch((err) => setError(err.message));
-  }, []);
+  }, [userId]);
 
   return (
     <div style={{ minHeight: "100vh", display: "flex" }}>
