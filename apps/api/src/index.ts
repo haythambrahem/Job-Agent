@@ -17,15 +17,6 @@ import { basicRateLimit } from "./middleware/rateLimit.js";
 import { requireAuth } from "./middleware/auth.js";
 import { requirePlan } from "./middleware/subscription.js";
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: process.env.WEB_ORIGIN || "http://localhost:3000", credentials: true }
-});
-
-const searchQueue = new TaskQueue(2);
-const applicationQueue = new TaskQueue(2);
-
 const AUTO_APPLY_MIN_SCORE = 70;
 const AUTO_APPLY_LIMIT = 3;
 const AUTO_APPLY_DELAY_RANGE_MS = { min: 2000, max: 5000 };
@@ -63,17 +54,32 @@ const envSchema = z.object({
   if (!values.STRIPE_SECRET_KEY) {
     ctx.addIssue({ code: "custom", path: ["STRIPE_SECRET_KEY"], message: "STRIPE_SECRET_KEY is required when Stripe is enabled" });
   }
-  if (!values.STRIPE_WEBHOOK_SECRET || !values.STRIPE_WEBHOOK_SECRET.startsWith("whsec_")) {
+  if (!values.STRIPE_WEBHOOK_SECRET) {
+    ctx.addIssue({ code: "custom", path: ["STRIPE_WEBHOOK_SECRET"], message: "STRIPE_WEBHOOK_SECRET is required when Stripe is enabled" });
+  } else if (!values.STRIPE_WEBHOOK_SECRET.startsWith("whsec_")) {
     ctx.addIssue({ code: "custom", path: ["STRIPE_WEBHOOK_SECRET"], message: "STRIPE_WEBHOOK_SECRET must start with whsec_" });
   }
-  if (!values.STRIPE_PRO_PRICE_ID || !values.STRIPE_PRO_PRICE_ID.startsWith("price_")) {
+  if (!values.STRIPE_PRO_PRICE_ID) {
+    ctx.addIssue({ code: "custom", path: ["STRIPE_PRO_PRICE_ID"], message: "STRIPE_PRO_PRICE_ID is required when Stripe is enabled" });
+  } else if (!values.STRIPE_PRO_PRICE_ID.startsWith("price_")) {
     ctx.addIssue({ code: "custom", path: ["STRIPE_PRO_PRICE_ID"], message: "STRIPE_PRO_PRICE_ID must start with price_" });
   }
-  if (!values.STRIPE_PREMIUM_PRICE_ID || !values.STRIPE_PREMIUM_PRICE_ID.startsWith("price_")) {
+  if (!values.STRIPE_PREMIUM_PRICE_ID) {
+    ctx.addIssue({ code: "custom", path: ["STRIPE_PREMIUM_PRICE_ID"], message: "STRIPE_PREMIUM_PRICE_ID is required when Stripe is enabled" });
+  } else if (!values.STRIPE_PREMIUM_PRICE_ID.startsWith("price_")) {
     ctx.addIssue({ code: "custom", path: ["STRIPE_PREMIUM_PRICE_ID"], message: "STRIPE_PREMIUM_PRICE_ID must start with price_" });
   }
 });
 const env = envSchema.parse(process.env);
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: process.env.WEB_ORIGIN || "http://localhost:3000", credentials: true }
+});
+
+const searchQueue = new TaskQueue(2);
+const applicationQueue = new TaskQueue(2);
 
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -226,6 +232,12 @@ async function handleSubscriptionCancelled(subscription: Stripe.Subscription): P
     console.warn("[Stripe webhook] customer.subscription.deleted: missing metadata.userId", {
       subscriptionId: subscription.id
     });
+    return;
+  }
+
+  const existingUser = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+  if (!existingUser) {
+    console.error(`[Stripe webhook] User not found: ${userId}`);
     return;
   }
 
