@@ -28,6 +28,7 @@ const applicationQueue = new TaskQueue(2);
 const AUTO_APPLY_MIN_SCORE = 70;
 const AUTO_APPLY_LIMIT = 3;
 const AUTO_APPLY_DELAY_RANGE_MS = { min: 2000, max: 5000 };
+const FREE_PLAN_MONTHLY_LIMIT = 10;
 
 type AutoAppliedJob = { title: string; company: string; url: string; score: number; applicationId: string };
 type AutoApplySkippedJob = { title: string; company: string; url: string; score: number; reason: string };
@@ -46,6 +47,19 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getCurrentMonthRange() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return { start, end };
+}
+
+function getFirstParam(value: string | string[] | undefined): string | null {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (Array.isArray(value) && value.length > 0) return value[0] || null;
+  return null;
+}
+
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.WEB_ORIGIN || "http://localhost:3000");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -59,6 +73,7 @@ app.use((req, res, next) => {
 });
 
 const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
+  console.log("Webhook received");
   const signature = req.headers["stripe-signature"];
   if (!signature || !process.env.STRIPE_WEBHOOK_SECRET || !stripe) {
     res.status(400).send("Missing Stripe signature or secret");
@@ -79,7 +94,8 @@ const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
       const userId = session.metadata?.userId || session.client_reference_id;
       const customerId = typeof session.customer === "string" ? session.customer : null;
       const subscriptionId = typeof session.subscription === "string" ? session.subscription : null;
-      const plan = (session.metadata?.plan as "pro" | "premium" | undefined) || "pro";
+      const metadataPlan = session.metadata?.plan;
+      const plan = metadataPlan === "premium" ? "premium" : "pro";
 
       if (userId) {
         await prisma.user.update({
@@ -91,6 +107,7 @@ const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
             subscriptionStatus: "active"
           }
         });
+        console.log(`User upgraded to ${plan.toUpperCase()}`);
         console.log(`[stripe] checkout.session.completed user=${userId} plan=${plan}`);
       }
     }
@@ -124,7 +141,8 @@ const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
     }
 
     res.json({ received: true });
-  } catch {
+  } catch (error) {
+    console.error("[stripe] webhook handling failed", error);
     res.status(500).json({ error: "webhook handling failed" });
   }
 };
@@ -134,11 +152,6 @@ app.post("/stripe/webhook", express.raw({ type: "application/json" }), stripeWeb
 
 app.use(express.json({ limit: "200kb" }));
 app.use(basicRateLimit);
-app.use((req, _res, next) => {
-  const user = req.user?.id || "anonymous";
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} user=${user}`);
-  next();
-});
 
 const store = {
   async saveJobs(userId: string, jobs: Array<{ title: string; company: string; url: string; source: string; applyEmail?: string | null }>): Promise<void> {
@@ -182,22 +195,31 @@ app.get("/health", (_req, res) => {
 });
 
 app.use(requireAuth);
+app.use((req, _res, next) => {
+  const user = req.user?.id || "anonymous";
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} user=${user}`);
+  next();
+});
 
 app.get("/subscription", async (req, res) => {
-  const userId = req.user!.id;
-  const now = new Date();
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const { start, end } = getCurrentMonthRange();
 
   const usedApplications = await prisma.application.count({
-    where: { userId, createdAt: { gte: monthStart } }
+    where: { userId, createdAt: { gte: start, lt: end } }
   });
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
+  const plan = user?.plan || "free";
 
   res.json({
-    plan: user?.plan || "free",
+    plan,
     usedApplications,
-    monthlyLimit: user?.plan === "free" ? 10 : null,
+    monthlyLimit: plan === "free" ? FREE_PLAN_MONTHLY_LIMIT : null,
     subscriptionStatus: user?.subscriptionStatus || "inactive"
   });
 });
@@ -386,7 +408,7 @@ app.get("/applications", async (req, res) => {
   res.json(applications);
 });
 
-app.post("/applications/apply", requirePlan("pro"), async (req, res) => {
+app.post("/applications/apply", async (req, res) => {
   const schema = z.object({ jobId: z.string().min(1), email: z.string().email().optional() });
   const parsed = schema.safeParse(req.body);
 
@@ -395,20 +417,37 @@ app.post("/applications/apply", requirePlan("pro"), async (req, res) => {
     return;
   }
 
-  const userId = req.user!.id;
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
 
-  if (user.plan === "free") {
-    const now = new Date();
-    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    const monthlyCount = await prisma.application.count({ where: { userId, createdAt: { gte: monthStart } } });
-    if (monthlyCount >= 10) {
+  const plan = user.plan ?? "free";
+
+  if (plan === "free") {
+    const { start, end } = getCurrentMonthRange();
+    let monthlyCount = 0;
+    try {
+      monthlyCount = (await prisma.application.count({
+        where: { userId, createdAt: { gte: start, lt: end } }
+      })) ?? 0;
+    } catch (error) {
+      monthlyCount = 0;
+      console.error(`[applications] failed-to-count-usage user=${userId}`, error);
+    }
+
+    if (monthlyCount >= FREE_PLAN_MONTHLY_LIMIT) {
       console.log(`[applications] free-plan-limit-reached user=${userId} count=${monthlyCount}`);
-      res.status(403).json({ error: "Free plan limit reached", monthlyLimit: 10 });
+      res.status(403).json({
+        error: `Free plan limit reached (${FREE_PLAN_MONTHLY_LIMIT} applications/month). Upgrade required.`,
+        monthlyLimit: FREE_PLAN_MONTHLY_LIMIT
+      });
       return;
     }
   }
@@ -455,7 +494,12 @@ app.post("/applications/apply", requirePlan("pro"), async (req, res) => {
 
 app.get("/applications/:id/preview", async (req, res) => {
   const userId = req.user!.id;
-  const application = await prisma.application.findFirst({ where: { id: req.params.id, userId } });
+  const applicationId = getFirstParam(req.params.id);
+  if (!applicationId) {
+    res.status(400).json({ error: "Invalid application id" });
+    return;
+  }
+  const application = await prisma.application.findFirst({ where: { id: applicationId, userId } });
   if (!application) {
     res.status(404).json({ error: "Application not found" });
     return;
@@ -473,10 +517,15 @@ app.get("/applications/:id/preview", async (req, res) => {
 
 app.post("/applications/:id/approve", requirePlan("pro"), async (req, res) => {
   const userId = req.user!.id;
+  const applicationId = getFirstParam(req.params.id);
+  if (!applicationId) {
+    res.status(400).json({ error: "Invalid application id" });
+    return;
+  }
   let current: { title: string; email: string | null } | null = null;
   try {
     current = await prisma.application.findFirst({
-      where: { id: req.params.id, userId },
+      where: { id: applicationId, userId },
       select: { title: true, email: true }
     });
     if (!current) {
@@ -489,7 +538,7 @@ app.post("/applications/:id/approve", requirePlan("pro"), async (req, res) => {
       return;
     }
 
-    const application = await applicationQueue.enqueue(() => approveAndSendApplication(userId, req.params.id, store));
+    const application = await applicationQueue.enqueue(() => approveAndSendApplication(userId, applicationId, store));
     res.json(application);
   } catch (error: any) {
     if (error?.message === "NO_RECIPIENT_EMAIL") {
@@ -503,7 +552,12 @@ app.post("/applications/:id/approve", requirePlan("pro"), async (req, res) => {
 app.post("/applications/:id/reject", requirePlan("pro"), async (req, res) => {
   try {
     const userId = req.user!.id;
-    const current = await prisma.application.findFirst({ where: { id: req.params.id, userId } });
+    const applicationId = getFirstParam(req.params.id);
+    if (!applicationId) {
+      res.status(400).json({ error: "Invalid application id" });
+      return;
+    }
+    const current = await prisma.application.findFirst({ where: { id: applicationId, userId } });
     if (!current) {
       res.status(404).json({ error: "Application not found" });
       return;
@@ -515,7 +569,7 @@ app.post("/applications/:id/reject", requirePlan("pro"), async (req, res) => {
     }
 
     const updated = await prisma.application.update({
-      where: { id_userId: { id: req.params.id, userId } },
+      where: { id_userId: { id: applicationId, userId } },
       data: { status: "rejected" }
     });
     res.json(updated);
