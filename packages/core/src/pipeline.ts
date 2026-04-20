@@ -4,6 +4,7 @@ import { filterRankedJobs, rankJobsByCv } from "./ranking.js";
 import { generateCoverLetter, type CoverLetterContent } from "./coverLetter.js";
 import { sendEmail } from "./email.js";
 import { buildEmailHtml } from "./emailTemplate.js";
+import { extractCvText } from "./cv.js";
 
 export interface PipelineStore {
   saveJobs(userId: string, jobs: Array<{ title: string; company: string; url: string; source: string; applyEmail?: string | null }>): Promise<void>;
@@ -54,20 +55,24 @@ function deserializeCoverLetter(application: Application): CoverLetterContent {
 }
 
 export async function scrapeMatchAndStoreJobs(
-  userId: string,
-  input: ScrapeJobsInput,
-  store: PipelineStore,
+  opts: {
+    userId: string;
+    cvPath: string;
+    cvText?: string;
+    input: ScrapeJobsInput;
+    store: PipelineStore;
+  },
   minScore = 70
 ): Promise<RankedJob[]> {
-  await store.createAIRun(userId, { type: "job_match", status: "started" });
+  await opts.store.createAIRun(opts.userId, { type: "job_match", status: "started" });
 
-  const jobs = await scrapeJobs(input);
-  const cvText = (await store.getCvSummary(userId)) || DEFAULT_CV_SUMMARY;
+  const jobs = await scrapeJobs(opts.input);
+  const cvText = opts.cvText || (await extractCvText(opts.cvPath)) || DEFAULT_CV_SUMMARY;
   const rankedJobs = await rankJobsByCv(jobs, cvText);
   const matched = filterRankedJobs(rankedJobs, minScore);
 
-  await store.saveJobs(
-    userId,
+  await opts.store.saveJobs(
+    opts.userId,
     matched.map((job) => ({
       title: job.title,
       company: job.company,
@@ -77,7 +82,7 @@ export async function scrapeMatchAndStoreJobs(
     }))
   );
 
-  await store.createAIRun(userId, { type: "job_match", status: "completed" });
+  await opts.store.createAIRun(opts.userId, { type: "job_match", status: "completed" });
   return matched;
 }
 
