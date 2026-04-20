@@ -2,7 +2,11 @@ import fs from "node:fs";
 
 const DEFAULT_CV_SUMMARY = "Développeur full-stack, Java, Spring Boot, Angular, 3 ans d'expérience";
 
-export async function readCV(cvPath = process.env.CV_PATH || "cv.pdf"): Promise<string> {
+interface PdfTextItem {
+  str?: string;
+}
+
+export async function extractCvText(cvPath: string): Promise<string> {
   if (!fs.existsSync(cvPath)) return DEFAULT_CV_SUMMARY;
 
   try {
@@ -14,11 +18,16 @@ export async function readCV(cvPath = process.env.CV_PATH || "cv.pdf"): Promise<
     for (let i = 1; i <= pdf.numPages; i += 1) {
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
-      text += content.items.map((item: any) => item.str).join(" ") + "\n";
+      const items = content.items as PdfTextItem[];
+      text += items.map((item) => item.str ?? "").join(" ") + "\n";
     }
 
     return text.trim().slice(0, 1500) || DEFAULT_CV_SUMMARY;
   } catch {
     return DEFAULT_CV_SUMMARY;
   }
+}
+
+export async function readCV(cvPath = process.env.CV_PATH || "cv.pdf"): Promise<string> {
+  return extractCvText(cvPath);
 }

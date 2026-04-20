@@ -1,11 +1,17 @@
 import "dotenv/config";
 import express from "express";
 import http from "node:http";
+import path from "node:path";
+import fs from "node:fs/promises";
 import { Server } from "socket.io";
 import type Stripe from "stripe";
+import multer from "multer";
+import sharp from "sharp";
+import bcrypt from "bcryptjs";
 import {
   approveAndSendApplication,
   createPendingApplication,
+  readCV,
   scrapeMatchAndStoreJobs,
   type Application
 } from "@job-agent/core";
@@ -33,6 +39,17 @@ const jobSearchSchema = z.object({
   keywords: z.string().min(1),
   location: z.string().optional(),
   limitPerSource: z.number().int().min(1).max(20).optional()
+});
+
+const updateProfileSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  phone: z.string().max(30).optional(),
+  location: z.string().max(100).optional()
+});
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8).max(128)
 });
 
 const envSchema = z.object({
@@ -81,6 +98,27 @@ const io = new Server(server, {
 const searchQueue = new TaskQueue(2);
 const applicationQueue = new TaskQueue(2);
 
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ["image/jpeg", "image/png", "image/webp"];
+    cb(null, allowed.includes(file.mimetype));
+  }
+});
+
+const cvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, file.mimetype === "application/pdf");
+  }
+});
+
+function resolveUploadPath(storedPath: string): string {
+  return path.join(process.cwd(), storedPath.replace(/^\/+/, ""));
+}
+
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -107,7 +145,7 @@ function getFirstParam(value: string | string[] | undefined): string | null {
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.WEB_ORIGIN || "http://localhost:3000");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   if (req.method === "OPTIONS") {
     res.status(204).end();
@@ -257,6 +295,7 @@ app.post("/stripe/webhook", express.raw({ type: "application/json" }), stripeWeb
 
 app.use(express.json({ limit: "200kb" }));
 app.use(basicRateLimit);
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 const store = {
   async saveJobs(userId: string, jobs: Array<{ title: string; company: string; url: string; source: string; applyEmail?: string | null }>): Promise<void> {
@@ -304,6 +343,201 @@ app.use((req, _res, next) => {
   const user = req.user?.id || "anonymous";
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} user=${user}`);
   next();
+});
+
+app.get("/profile", async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      image: true,
+      phone: true,
+      location: true,
+      plan: true,
+      subscriptionStatus: true,
+      cvPath: true,
+      cvOriginalName: true,
+      cvUploadedAt: true,
+      createdAt: true
+    }
+  });
+
+  if (!user) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  res.json(user);
+});
+
+app.patch("/profile", async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const body = updateProfileSchema.safeParse(req.body);
+  if (!body.success) {
+    res.status(400).json({ error: body.error.flatten() });
+    return;
+  }
+
+  const updated = await prisma.user.update({
+    where: { id: userId },
+    data: body.data,
+    select: { id: true, name: true, phone: true, location: true }
+  });
+
+  res.json(updated);
+});
+
+app.post("/profile/avatar", basicRateLimit, avatarUpload.single("avatar"), async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  if (!req.file) {
+    res.status(400).json({ error: "No image file provided" });
+    return;
+  }
+
+  const filename = `${userId}.webp`;
+  const outputPath = path.join(process.cwd(), "uploads", "avatars", filename);
+
+  await sharp(req.file.buffer)
+    .resize(256, 256, { fit: "cover", position: "center" })
+    .webp({ quality: 85 })
+    .toFile(outputPath);
+
+  const imageUrl = `/uploads/avatars/${filename}?t=${Date.now()}`;
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { image: imageUrl }
+  });
+
+  res.json({ image: imageUrl });
+});
+
+app.post("/profile/cv", basicRateLimit, cvUpload.single("cv"), async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  if (!req.file) {
+    res.status(400).json({ error: "No PDF file provided" });
+    return;
+  }
+
+  const filename = `${userId}.pdf`;
+  const outputPath = path.join(process.cwd(), "uploads", "cvs", filename);
+
+  await fs.writeFile(outputPath, req.file.buffer);
+
+  const cvPath = `/uploads/cvs/${filename}`;
+  const now = new Date();
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      cvPath,
+      cvOriginalName: req.file.originalname,
+      cvUploadedAt: now
+    }
+  });
+
+  try {
+    const text = await readCV(outputPath);
+    await prisma.cvProfile.upsert({
+      where: { userId },
+      create: { userId, rawText: text },
+      update: { rawText: text }
+    });
+  } catch (error) {
+    console.error("[CV upload] Text extraction failed (non-fatal):", error);
+  }
+
+  res.json({ cvPath, cvOriginalName: req.file.originalname, cvUploadedAt: now });
+});
+
+app.delete("/profile/cv", async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { cvPath: true }
+  });
+
+  if (user?.cvPath) {
+    const filePath = resolveUploadPath(user.cvPath);
+    await fs.unlink(filePath).catch(() => undefined);
+  }
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { cvPath: null, cvOriginalName: null, cvUploadedAt: null }
+  });
+
+  await prisma.cvProfile.deleteMany({ where: { userId } });
+
+  res.json({ success: true });
+});
+
+app.patch("/profile/password", async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const body = changePasswordSchema.safeParse(req.body);
+  if (!body.success) {
+    res.status(400).json({ error: body.error.flatten() });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { password: true }
+  });
+
+  if (!user?.password) {
+    res.status(400).json({ error: "No password set on this account" });
+    return;
+  }
+
+  const valid = await bcrypt.compare(body.data.currentPassword, user.password);
+  if (!valid) {
+    res.status(401).json({ error: "Current password is incorrect" });
+    return;
+  }
+
+  const hashed = await bcrypt.hash(body.data.newPassword, 12);
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { password: hashed }
+  });
+
+  console.log(`[Profile] Password changed for userId=${userId}`);
+  res.json({ success: true });
 });
 
 app.get("/subscription", async (req, res) => {
@@ -412,6 +646,18 @@ app.post("/jobs/search", requirePlan("pro"), async (req, res) => {
   }
 
   const userId = req.user!.id;
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { cvPath: true }
+  });
+
+  if (!user?.cvPath) {
+    res.status(400).json({
+      error: "NO_CV_UPLOADED",
+      message: "Please upload your CV in your profile before searching for jobs."
+    });
+    return;
+  }
 
   try {
     const jobs = await searchQueue.enqueue(() =>
@@ -441,6 +687,18 @@ app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
   }
 
   const userId = req.user!.id;
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { cvPath: true }
+  });
+
+  if (!user?.cvPath) {
+    res.status(400).json({
+      error: "NO_CV_UPLOADED",
+      message: "Please upload your CV in your profile before searching for jobs."
+    });
+    return;
+  }
 
   try {
     const result = await searchQueue.enqueue(async () => {

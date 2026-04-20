@@ -20,6 +20,11 @@ Thumbs.db
 
 # build
 dist/
+apps/api/uploads/*
+!apps/api/uploads/avatars/
+!apps/api/uploads/cvs/
+!apps/api/uploads/avatars/.gitkeep
+!apps/api/uploads/cvs/.gitkeep
 
 # prisma
 apps/api/prisma/dev.db
