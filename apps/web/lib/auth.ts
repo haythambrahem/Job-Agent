@@ -2,7 +2,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import type { JWT } from "next-auth/jwt";
-import { compare } from "bcrypt";
+import { compare } from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "./prisma";
 

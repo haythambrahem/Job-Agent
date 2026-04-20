@@ -11,7 +11,7 @@ import bcrypt from "bcryptjs";
 import {
   approveAndSendApplication,
   createPendingApplication,
-  extractCvText,
+  readCV,
   scrapeMatchAndStoreJobs,
   type Application
 } from "@job-agent/core";
@@ -400,7 +400,7 @@ app.patch("/profile", async (req, res) => {
   res.json(updated);
 });
 
-app.post("/profile/avatar", avatarUpload.single("avatar"), async (req, res) => {
+app.post("/profile/avatar", basicRateLimit, avatarUpload.single("avatar"), async (req, res) => {
   const userId = req.user?.id;
   if (!userId) {
     res.status(401).json({ error: "Unauthorized" });
@@ -430,7 +430,7 @@ app.post("/profile/avatar", avatarUpload.single("avatar"), async (req, res) => {
   res.json({ image: imageUrl });
 });
 
-app.post("/profile/cv", cvUpload.single("cv"), async (req, res) => {
+app.post("/profile/cv", basicRateLimit, cvUpload.single("cv"), async (req, res) => {
   const userId = req.user?.id;
   if (!userId) {
     res.status(401).json({ error: "Unauthorized" });
@@ -460,7 +460,7 @@ app.post("/profile/cv", cvUpload.single("cv"), async (req, res) => {
   });
 
   try {
-    const text = await extractCvText(outputPath);
+    const text = await readCV(outputPath);
     await prisma.cvProfile.upsert({
       where: { userId },
       create: { userId, rawText: text },
@@ -648,10 +648,7 @@ app.post("/jobs/search", requirePlan("pro"), async (req, res) => {
   const userId = req.user!.id;
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: {
-      cvPath: true,
-      cvProfile: { select: { rawText: true } }
-    }
+    select: { cvPath: true }
   });
 
   if (!user?.cvPath) {
@@ -665,17 +662,13 @@ app.post("/jobs/search", requirePlan("pro"), async (req, res) => {
   try {
     const jobs = await searchQueue.enqueue(() =>
       scrapeMatchAndStoreJobs(
+        userId,
         {
-          userId,
-          cvPath: resolveUploadPath(user.cvPath),
-          cvText: user.cvProfile?.rawText ?? undefined,
-          input: {
-            keywords: parsed.data.keywords,
-            location: parsed.data.location,
-            limitPerSource: parsed.data.limitPerSource ?? 5
-          },
-          store
+          keywords: parsed.data.keywords,
+          location: parsed.data.location,
+          limitPerSource: parsed.data.limitPerSource ?? 5
         },
+        store,
         AUTO_APPLY_MIN_SCORE
       )
     );
@@ -696,10 +689,7 @@ app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
   const userId = req.user!.id;
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: {
-      cvPath: true,
-      cvProfile: { select: { rawText: true } }
-    }
+    select: { cvPath: true }
   });
 
   if (!user?.cvPath) {
@@ -714,17 +704,13 @@ app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
     const result = await searchQueue.enqueue(async () => {
       console.log(`[auto-apply] start user=${userId} keywords="${parsed.data.keywords}"`);
       const rankedJobs = await scrapeMatchAndStoreJobs(
+        userId,
         {
-          userId,
-          cvPath: resolveUploadPath(user.cvPath),
-          cvText: user.cvProfile?.rawText ?? undefined,
-          input: {
-            keywords: parsed.data.keywords,
-            location: parsed.data.location,
-            limitPerSource: parsed.data.limitPerSource ?? 5
-          },
-          store
+          keywords: parsed.data.keywords,
+          location: parsed.data.location,
+          limitPerSource: parsed.data.limitPerSource ?? 5
         },
+        store,
         AUTO_APPLY_MIN_SCORE
       );
       console.log(`[auto-apply] ranked jobs=${rankedJobs.length}`);
