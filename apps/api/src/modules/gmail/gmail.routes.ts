@@ -14,6 +14,10 @@ router.get("/connect", requireAuth, (req, res) => {
     return;
   }
   const url = gmailService.getAuthUrl(userId);
+  if ((req.get("accept") || "").includes("application/json")) {
+    res.json({ url });
+    return;
+  }
   res.redirect(url);
 });
 

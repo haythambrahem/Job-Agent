@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 
 interface GmailStatus {
   connected: boolean;
@@ -12,20 +13,25 @@ interface GmailStatus {
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
 
 export default function GmailConnect({ apiToken }: { apiToken: string }) {
+  const { data: session } = useSession();
   const searchParams = useSearchParams();
   const [status, setStatus] = useState<GmailStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [connectLoading, setConnectLoading] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
 
-  const headers = useMemo(
-    () => ({
-      Authorization: `Bearer ${apiToken}`
-    }),
-    [apiToken]
-  );
+  const authToken = session?.accessToken ?? apiToken;
+  const headers = useMemo(() => {
+    if (!authToken) return null;
+    return {
+      Authorization: `Bearer ${authToken}`
+    };
+  }, [authToken]);
 
   useEffect(() => {
-    if (!apiToken) {
+    if (!headers) {
       setLoading(false);
+      setStatus({ connected: false });
       return;
     }
 
@@ -39,12 +45,49 @@ export default function GmailConnect({ apiToken }: { apiToken: string }) {
       .then(setStatus)
       .catch(() => setStatus({ connected: false }))
       .finally(() => setLoading(false));
-  }, [apiToken, headers]);
+  }, [headers]);
 
   const gmailParam = searchParams.get("gmail");
 
-  const handleConnect = () => {
-    window.location.href = `${API_BASE_URL}/gmail/connect`;
+  const handleConnect = async () => {
+    if (!headers) {
+      setConnectError("Your session has expired. Please sign in again and retry.");
+      return;
+    }
+
+    setConnectLoading(true);
+    setConnectError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/gmail/connect`, {
+        headers: {
+          ...headers,
+          Accept: "application/json"
+        }
+      });
+
+      if (response.status === 401) {
+        setConnectError("Your session has expired. Please sign in again and retry.");
+        return;
+      }
+
+      if (!response.ok) {
+        setConnectError("Could not start Gmail connection. Please try again.");
+        return;
+      }
+
+      const data = (await response.json()) as { url?: string };
+      if (!data.url) {
+        setConnectError("Could not start Gmail connection. Please try again.");
+        return;
+      }
+
+      window.location.href = data.url;
+    } catch {
+      setConnectError("Could not start Gmail connection. Please try again.");
+    } finally {
+      setConnectLoading(false);
+    }
   };
 
   const handleDisconnect = async () => {
@@ -77,6 +120,11 @@ export default function GmailConnect({ apiToken }: { apiToken: string }) {
       {gmailParam === "denied" && (
         <div style={{ color: "var(--color-text-danger)", fontSize: 13, marginBottom: 12 }}>
           Permission denied. Please try again.
+        </div>
+      )}
+      {connectError && (
+        <div style={{ color: "var(--color-text-danger)", fontSize: 13, marginBottom: 12 }}>
+          {connectError}
         </div>
       )}
 
@@ -112,7 +160,10 @@ export default function GmailConnect({ apiToken }: { apiToken: string }) {
             </div>
           </div>
           <button
-            onClick={handleConnect}
+            onClick={() => {
+              void handleConnect();
+            }}
+            disabled={connectLoading}
             style={{
               fontSize: 12,
               padding: "6px 14px",
@@ -120,10 +171,11 @@ export default function GmailConnect({ apiToken }: { apiToken: string }) {
               color: "#fff",
               border: "none",
               borderRadius: "var(--border-radius-md)",
-              cursor: "pointer"
+              cursor: connectLoading ? "not-allowed" : "pointer",
+              opacity: connectLoading ? 0.7 : 1
             }}
           >
-            Connect Gmail
+            {connectLoading ? "Connecting..." : "Connect Gmail"}
           </button>
         </div>
       )}
