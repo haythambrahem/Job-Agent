@@ -1,9 +1,8 @@
-import type { Application, RankedJob, ScrapedJob } from "./types.js";
-import { scrapeJobs, type ScrapeJobsInput } from "./scraper.js";
+import type { Application, RankedJob } from "./types.js";
+import { scrapeJobs, type ScrapeJobsInput } from "./scraper.service.js";
 import { filterRankedJobs, rankJobsByCv } from "./ranking.js";
 import { generateCoverLetter, type CoverLetterContent } from "./coverLetter.js";
-import { sendEmail } from "./email.js";
-import { buildEmailHtml } from "./emailTemplate.js";
+import type { MailProvider } from "./providers/mail/mail.provider.js";
 
 export interface PipelineStore {
   saveJobs(userId: string, jobs: Array<{ title: string; company: string; url: string; source: string; applyEmail?: string | null }>): Promise<void>;
@@ -21,53 +20,27 @@ export interface PipelineStore {
 }
 
 const DEFAULT_CV_SUMMARY = "Développeur full-stack, Java, Spring Boot, Angular, 3 ans d'expérience";
-const DEFAULT_CV_PDF_PATH = "./assets/cv-haytham-brahem.pdf";
 
 function serializeCoverLetter(content: CoverLetterContent): string {
   return JSON.stringify(content);
 }
 
-function fallbackCoverLetterContent(application: Application): CoverLetterContent {
-  return {
-    subject: `Application for ${application.title} — Haytham Brahem`,
-    opening: `Dear Hiring Manager at ${application.company},`,
-    body: application.coverLetter,
-    closing: "Thank you for your time and consideration."
-  };
-}
+export async function scrapeMatchAndStoreJobs(opts: {
+  userId: string;
+  input: ScrapeJobsInput;
+  store: PipelineStore;
+  minScore?: number;
+}): Promise<RankedJob[]> {
+  const minScore = opts.minScore ?? 70;
+  await opts.store.createAIRun(opts.userId, { type: "job_match", status: "started" });
 
-function deserializeCoverLetter(application: Application): CoverLetterContent {
-  try {
-    const parsed = JSON.parse(application.coverLetter) as Partial<CoverLetterContent>;
-    if (typeof parsed.subject === "string" && typeof parsed.opening === "string" && typeof parsed.body === "string" && typeof parsed.closing === "string") {
-      return {
-        subject: parsed.subject,
-        opening: parsed.opening,
-        body: parsed.body,
-        closing: parsed.closing
-      };
-    }
-  } catch {
-    // fallback below
-  }
-  return fallbackCoverLetterContent(application);
-}
-
-export async function scrapeMatchAndStoreJobs(
-  userId: string,
-  input: ScrapeJobsInput,
-  store: PipelineStore,
-  minScore = 70
-): Promise<RankedJob[]> {
-  await store.createAIRun(userId, { type: "job_match", status: "started" });
-
-  const jobs = await scrapeJobs(input);
-  const cvText = (await store.getCvSummary(userId)) || DEFAULT_CV_SUMMARY;
+  const jobs = await scrapeJobs(opts.input);
+  const cvText = (await opts.store.getCvSummary(opts.userId)) || DEFAULT_CV_SUMMARY;
   const rankedJobs = await rankJobsByCv(jobs, cvText);
   const matched = filterRankedJobs(rankedJobs, minScore);
 
-  await store.saveJobs(
-    userId,
+  await opts.store.saveJobs(
+    opts.userId,
     matched.map((job) => ({
       title: job.title,
       company: job.company,
@@ -77,7 +50,7 @@ export async function scrapeMatchAndStoreJobs(
     }))
   );
 
-  await store.createAIRun(userId, { type: "job_match", status: "completed" });
+  await opts.store.createAIRun(opts.userId, { type: "job_match", status: "completed" });
   return matched;
 }
 
@@ -105,28 +78,17 @@ export async function createPendingApplication(userId: string, input: {
   });
 }
 
-export async function approveAndSendApplication(userId: string, id: string, store: PipelineStore): Promise<Application> {
-  await store.updateApplicationStatus(userId, id, "approved");
-  const approved = await store.findApplicationById(userId, id);
-
-  if (!approved || approved.status !== "approved") {
-    throw new Error("Application must be approved before sending");
-  }
-
-  if (!approved.email) {
-    const noRecipientError = new Error("NO_RECIPIENT_EMAIL");
-    noRecipientError.name = "NoRecipientEmailError";
-    throw noRecipientError;
-  }
-
-  const content = deserializeCoverLetter(approved);
-
-  await sendEmail({
-    to: approved.email,
-    subject: content.subject,
-    htmlBody: buildEmailHtml(content),
-    cvPdfPath: process.env.CV_PDF_PATH || DEFAULT_CV_PDF_PATH
+export async function sendApplicationEmail(opts: {
+  provider: MailProvider;
+  to: string;
+  subject: string;
+  htmlBody: string;
+  attachments?: Array<{ filename: string; mimeType: string; data: Buffer }>;
+}): Promise<void> {
+  await opts.provider.sendEmail({
+    to: opts.to,
+    subject: opts.subject,
+    htmlBody: opts.htmlBody,
+    attachments: opts.attachments
   });
-
-  return store.updateApplicationStatus(userId, id, "sent");
 }

@@ -2,6 +2,7 @@
 
 import { useRef, useState, type FormEvent } from "react";
 import { useSession } from "next-auth/react";
+import GmailConnect from "./GmailConnect";
 
 interface Profile {
   id: string;
@@ -221,6 +222,11 @@ export default function ProfileClient({ initialProfile, apiToken }: { initialPro
             }}
           />
         </div>
+      </section>
+
+      <section style={{ background: "white", borderRadius: 12, padding: 16 }}>
+        <h2>Gmail</h2>
+        <GmailConnect apiToken={apiToken} />
       </section>
 
       <section style={{ background: "white", borderRadius: 12, padding: 16 }}>

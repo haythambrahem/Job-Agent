@@ -34,8 +34,14 @@ packages/
 ### API (`apps/api`)
 - `API_PORT`
 - `WEB_ORIGIN`
+- `DATABASE_URL`
 - `NEXTAUTH_SECRET`
-- `CV_PDF_PATH` (default: `./assets/cv-haytham-brahem.pdf`)
+- `REDIS_URL`
+- `TOKEN_ENCRYPTION_SECRET` (>= 32 chars)
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI`
+- `LOG_LEVEL`
 - `STRIPE_SECRET_KEY`
 - `STRIPE_PRICE_ID` (single-price fallback, useful in development)
 - `STRIPE_WEBHOOK_SECRET`
@@ -45,9 +51,6 @@ packages/
 
 ### Core (`packages/core`)
 - `GROQ_API_KEY`
-- `GMAIL_CREDENTIALS_PATH`
-- `GMAIL_TOKEN_PATH`
-- `CV_PDF_PATH` (default: `./assets/cv-haytham-brahem.pdf`)
 
 ## Local setup
 
