@@ -1,4 +1,5 @@
 import { google } from "googleapis";
+import { randomBytes } from "node:crypto";
 import type { OAuth2Client } from "google-auth-library";
 import type { MailProvider, SendEmailInput } from "../mail/mail.provider.js";
 
@@ -30,7 +31,7 @@ function buildMimeMessage(opts: {
   htmlBody: string;
   attachments?: SendEmailInput["attachments"];
 }): string {
-  const boundary = `boundary_${Date.now().toString(36)}`;
+  const boundary = `boundary_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`;
   const lines: string[] = [];
 
   lines.push("MIME-Version: 1.0");

@@ -84,7 +84,7 @@ router.post("/test", requireAuth, async (req, res) => {
     },
     { attempts: 1 }
   );
-  res.json({ message: "Test email queued" });
+  res.json({ message: "Test email queued successfully" });
 });
 
 export { router as gmailRouter };

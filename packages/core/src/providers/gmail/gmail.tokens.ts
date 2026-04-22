@@ -12,8 +12,10 @@ export interface RefreshResult {
   changed: boolean;
 }
 
+const TOKEN_EXPIRY_BUFFER_SECONDS = 300;
+
 export function isTokenExpired(expiresAt: number): boolean {
-  return Date.now() / 1000 > expiresAt - 300;
+  return Date.now() / 1000 > expiresAt - TOKEN_EXPIRY_BUFFER_SECONDS;
 }
 
 export async function refreshAccessToken(opts: {

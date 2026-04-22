@@ -10,9 +10,15 @@ import { sendApplicationEmail } from "@job-agent/core";
 
 const gmailService = new GmailService(prisma);
 const lastSentAt = new Map<string, number>();
+const BASE_THROTTLE_DELAY_MINUTES = 2;
+const RANDOM_THROTTLE_DELAY_MINUTES = 3;
+const EMAIL_WORKER_CONCURRENCY = Number(process.env.EMAIL_WORKER_CONCURRENCY ?? 5);
 
 function getDelayMs(): number {
-  return (2 * 60 + Math.floor(Math.random() * 3 * 60)) * 1000;
+  return (
+    (BASE_THROTTLE_DELAY_MINUTES * 60 + Math.floor(Math.random() * RANDOM_THROTTLE_DELAY_MINUTES * 60)) *
+    1000
+  );
 }
 
 export const emailWorker = new Worker<EmailJobData>(
@@ -48,8 +54,9 @@ export const emailWorker = new Worker<EmailJobData>(
       if (cvPath) {
         const fullPath = path.join(process.cwd(), "apps/api", cvPath);
         const data = await readFile(fullPath);
+        const filename = path.basename(fullPath) || "cv.pdf";
         attachments.push({
-          filename: "CV-Haytham-Brahem.pdf",
+          filename,
           mimeType: "application/pdf",
           data
         });
@@ -89,7 +96,7 @@ export const emailWorker = new Worker<EmailJobData>(
   },
   {
     connection: redisConnection,
-    concurrency: 5
+    concurrency: EMAIL_WORKER_CONCURRENCY
   }
 );
 

@@ -80,7 +80,7 @@ export class GmailService {
   async buildProviderForUser(userId: string): Promise<GmailProvider> {
     const tokenData = await this.repo.getTokens(userId);
     if (!tokenData) {
-      throw new Error(`NO_GMAIL_CONNECTED: userId=${userId}`);
+      throw new Error("NO_GMAIL_CONNECTED");
     }
 
     const oauth2Client = await buildOAuth2Client({

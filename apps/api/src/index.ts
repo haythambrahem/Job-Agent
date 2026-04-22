@@ -70,6 +70,7 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().min(1),
   GOOGLE_REDIRECT_URI: z.string().url(),
   LOG_LEVEL: z.string().optional(),
+  EMAIL_WORKER_CONCURRENCY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   STRIPE_PRO_PRICE_ID: z.string().optional(),
@@ -158,9 +159,9 @@ function getFirstParam(value: string | string[] | undefined): string | null {
   return null;
 }
 
-function parseCoverLetterContent(serialized: string, fallbackTitle: string, fallbackCompany: string): CoverLetterContent {
+function parseCoverLetterContent(coverLetterJson: string, fallbackTitle: string, fallbackCompany: string): CoverLetterContent {
   try {
-    const parsed = JSON.parse(serialized) as Partial<CoverLetterContent>;
+    const parsed = JSON.parse(coverLetterJson) as Partial<CoverLetterContent>;
     if (
       typeof parsed.subject === "string" &&
       typeof parsed.opening === "string" &&
@@ -181,9 +182,13 @@ function parseCoverLetterContent(serialized: string, fallbackTitle: string, fall
   return {
     subject: `Application for ${fallbackTitle} — Haytham Brahem`,
     opening: `Dear Hiring Manager at ${fallbackCompany},`,
-    body: serialized,
+    body: coverLetterJson,
     closing: "Thank you for your time and consideration."
   };
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 app.use((req, res, next) => {
@@ -711,8 +716,8 @@ app.post("/jobs/search", requirePlan("pro"), requireGmail, async (req, res) => {
       })
     );
     res.json({ jobs });
-  } catch (error: any) {
-    res.status(500).json({ error: error?.message || "job search failed" });
+  } catch (error: unknown) {
+    res.status(500).json({ error: getErrorMessage(error, "job search failed") });
   }
 });
 
@@ -780,6 +785,10 @@ app.post("/jobs/auto-apply", requirePlan("premium"), requireGmail, async (req, r
               store
             });
             const coverLetter = parseCoverLetterContent(application.coverLetter, application.title, application.company);
+            const recipientTo = application.email ?? job.applyEmail;
+            if (!recipientTo) {
+              throw new Error("NO_RECIPIENT_EMAIL");
+            }
             await prisma.application.update({
               where: { id_userId: { id: application.id, userId } },
               data: { status: "approved" }
@@ -788,7 +797,7 @@ app.post("/jobs/auto-apply", requirePlan("premium"), requireGmail, async (req, r
             await emailQueue.add("application-email", {
               userId,
               type: "application",
-              to: application.email ?? job.applyEmail,
+              to: recipientTo,
               subject: coverLetter.subject,
               htmlBody: buildEmailHtml(coverLetter),
               applicationId: application.id,
@@ -800,8 +809,8 @@ app.post("/jobs/auto-apply", requirePlan("premium"), requireGmail, async (req, r
           });
           applied.push({ title: job.title, company: job.company, url: job.url, score: job.score, applicationId: sent.id });
           logger.info({ userId, applicationId: sent.id, title: job.title }, "Auto-apply queued application");
-        } catch (error: any) {
-          logger.error({ userId, title: job.title, error: error?.message || "unknown" }, "Auto-apply failed");
+        } catch (error: unknown) {
+          logger.error({ userId, title: job.title, error: getErrorMessage(error, "unknown") }, "Auto-apply failed");
           skipped.push({ title: job.title, company: job.company, url: job.url, score: job.score, reason: "apply_failed" });
         }
 
@@ -817,8 +826,8 @@ app.post("/jobs/auto-apply", requirePlan("premium"), requireGmail, async (req, r
     });
 
     res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error?.message || "auto-apply failed" });
+  } catch (error: unknown) {
+    res.status(500).json({ error: getErrorMessage(error, "auto-apply failed") });
   }
 });
 
@@ -894,10 +903,14 @@ app.post("/applications/apply", async (req, res) => {
   const trimmedEmail = parsed.data.email?.trim();
 
   if (trimmedEmail && trimmedEmail !== job.applyEmail) {
-    await prisma.job.update({
-      where: { userId_url: { userId, url: job.url } },
+    const updatedCount = await prisma.job.updateMany({
+      where: { id: parsed.data.jobId, userId },
       data: { applyEmail: trimmedEmail }
-    }).catch(() => undefined);
+    }).catch(() => ({ count: 0 }));
+    if (updatedCount.count === 0) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
   }
 
   try {
@@ -913,8 +926,8 @@ app.post("/applications/apply", async (req, res) => {
 
 
     res.status(201).json(application);
-  } catch (error: any) {
-    res.status(500).json({ error: error?.message || "application pipeline failed" });
+  } catch (error: unknown) {
+    res.status(500).json({ error: getErrorMessage(error, "application pipeline failed") });
   }
 });
 
@@ -990,13 +1003,13 @@ app.post("/applications/:id/approve", requirePlan("pro"), requireGmail, async (r
       where: { id: applicationId, userId }
     });
 
-    res.json({ status: "queued", application: updated });
-  } catch (error: any) {
-    if (error?.message === "NO_RECIPIENT_EMAIL") {
+    res.json({ queueStatus: "queued", applicationStatus: updated?.status ?? "approved", application: updated });
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "NO_RECIPIENT_EMAIL") {
       res.status(422).json({ error: "NO_RECIPIENT_EMAIL", jobTitle: current?.title || "Unknown role" });
       return;
     }
-    res.status(400).json({ error: error?.message || "approval failed" });
+    res.status(400).json({ error: getErrorMessage(error, "approval failed") });
   }
 });
 
@@ -1024,8 +1037,8 @@ app.post("/applications/:id/reject", requirePlan("pro"), async (req, res) => {
       data: { status: "rejected" }
     });
     res.json(updated);
-  } catch (error: any) {
-    res.status(400).json({ error: error?.message || "rejection failed" });
+  } catch (error: unknown) {
+    res.status(400).json({ error: getErrorMessage(error, "rejection failed") });
   }
 });
 

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 const ALGORITHM = "aes-256-gcm";
 const KEY_LENGTH = 32;
@@ -8,9 +8,9 @@ const TAG_LENGTH = 16;
 function getKey(): Buffer {
   const secret = process.env.TOKEN_ENCRYPTION_SECRET;
   if (!secret || secret.length < 32) {
-    throw new Error("TOKEN_ENCRYPTION_SECRET must be at least 32 characters");
+    throw new Error("TOKEN_ENCRYPTION_SECRET must be at least 32 characters to ensure adequate encryption strength");
   }
-  return Buffer.from(secret.slice(0, KEY_LENGTH), "utf8");
+  return createHash("sha256").update(secret, "utf8").digest().subarray(0, KEY_LENGTH);
 }
 
 export function encrypt(plaintext: string): string {
