@@ -1,7 +1,7 @@
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import type { JWT } from "next-auth/jwt";
+import { encode, type JWT } from "next-auth/jwt";
 import { compare } from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "./prisma";
@@ -93,6 +93,18 @@ export const authOptions: NextAuthOptions = {
         session.user.plan = (token.plan as "free" | "pro" | "premium") || "free";
         session.user.name = token.name ?? null;
         session.user.image = typeof token.picture === "string" ? token.picture : null;
+
+        if (process.env.NEXTAUTH_SECRET && token.sub) {
+          session.accessToken = await encode({
+            token: {
+              sub: token.sub,
+              email: token.email || "",
+              plan: (token.plan as "free" | "pro" | "premium") || "free"
+            },
+            secret: process.env.NEXTAUTH_SECRET,
+            maxAge: 60 * 60
+          });
+        }
       }
       return session;
     }
