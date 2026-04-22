@@ -92,6 +92,10 @@ export default function GmailConnect({ apiToken }: { apiToken: string }) {
 
   const handleDisconnect = async () => {
     if (!confirm("Disconnect Gmail? You will not be able to apply until reconnected.")) return;
+    if (!headers) {
+      setConnectError("Your session has expired. Please sign in again and retry.");
+      return;
+    }
     await fetch(`${API_BASE_URL}/gmail/disconnect`, { method: "DELETE", headers });
     setStatus({ connected: false });
   };
