@@ -9,7 +9,8 @@ import multer from "multer";
 import sharp from "sharp";
 import bcrypt from "bcryptjs";
 import {
-  approveAndSendApplication,
+  buildEmailHtml,
+  type CoverLetterContent,
   createPendingApplication,
   readCV,
   scrapeMatchAndStoreJobs,
@@ -21,7 +22,11 @@ import { stripe, stripeEnabled, resolvePlanFromPriceId, STRIPE_PRICE_PREMIUM, ST
 import { TaskQueue } from "./lib/queue.js";
 import { basicRateLimit } from "./middleware/rateLimit.js";
 import { requireAuth } from "./middleware/auth.js";
+import { requireGmail } from "./middleware/requireGmail.js";
 import { requirePlan } from "./middleware/subscription.js";
+import { gmailRouter } from "./modules/gmail/gmail.routes.js";
+import { logger } from "./lib/logger.js";
+import "./workers/email.worker.js";
 
 const AUTO_APPLY_MIN_SCORE = 70;
 const AUTO_APPLY_LIMIT = 3;
@@ -54,6 +59,18 @@ const changePasswordSchema = z.object({
 
 const envSchema = z.object({
   NODE_ENV: z.string().optional(),
+  API_PORT: z.string().optional(),
+  WEB_ORIGIN: z.string().min(1),
+  DATABASE_URL: z.string().min(1),
+  NEXTAUTH_SECRET: z.string().min(1),
+  GROQ_API_KEY: z.string().optional(),
+  REDIS_URL: z.string().min(1),
+  TOKEN_ENCRYPTION_SECRET: z.string().min(32),
+  GOOGLE_CLIENT_ID: z.string().min(1),
+  GOOGLE_CLIENT_SECRET: z.string().min(1),
+  GOOGLE_REDIRECT_URI: z.string().url(),
+  LOG_LEVEL: z.string().optional(),
+  EMAIL_WORKER_CONCURRENCY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   STRIPE_PRO_PRICE_ID: z.string().optional(),
@@ -142,6 +159,38 @@ function getFirstParam(value: string | string[] | undefined): string | null {
   return null;
 }
 
+function parseCoverLetterContent(coverLetterJson: string, fallbackTitle: string, fallbackCompany: string): CoverLetterContent {
+  try {
+    const parsed = JSON.parse(coverLetterJson) as Partial<CoverLetterContent>;
+    if (
+      typeof parsed.subject === "string" &&
+      typeof parsed.opening === "string" &&
+      typeof parsed.body === "string" &&
+      typeof parsed.closing === "string"
+    ) {
+      return {
+        subject: parsed.subject,
+        opening: parsed.opening,
+        body: parsed.body,
+        closing: parsed.closing
+      };
+    }
+  } catch {
+    // fallback below
+  }
+
+  return {
+    subject: `Application for ${fallbackTitle} — Haytham Brahem`,
+    opening: `Dear Hiring Manager at ${fallbackCompany},`,
+    body: coverLetterJson,
+    closing: "Thank you for your time and consideration."
+  };
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.WEB_ORIGIN || "http://localhost:3000");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -159,7 +208,7 @@ const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
   const signature = typeof signatureHeader === "string" ? signatureHeader : null;
   const webhookSecret = env.STRIPE_WEBHOOK_SECRET;
   if (!signature || !stripe || !webhookSecret) {
-    console.error("[Stripe webhook] Missing signature or Stripe client");
+    logger.error({ hasSignature: Boolean(signature), hasStripe: Boolean(stripe), hasWebhookSecret: Boolean(webhookSecret) }, "Stripe webhook missing signature or Stripe client");
     res.status(400).json({ error: "Missing webhook configuration" });
     return;
   }
@@ -169,12 +218,12 @@ const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
     event = stripe.webhooks.constructEvent(req.body as Buffer, signature, webhookSecret);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    console.error(`[Stripe webhook] Signature verification failed: ${message}`);
+    logger.error({ message }, "Stripe webhook signature verification failed");
     res.status(400).json({ error: `Webhook signature invalid: ${message}` });
     return;
   }
 
-  console.log(`[Stripe webhook] Received event: ${event.type} | id: ${event.id}`);
+  logger.info({ eventType: event.type, eventId: event.id }, "Stripe webhook event received");
   res.status(200).json({ received: true });
 
   void (async () => {
@@ -211,11 +260,11 @@ const stripeWebhookHandler: express.RequestHandler = async (req, res) => {
                       : "canceled"
             }
           });
-          console.log(`[stripe] ${event.type} customer=${customerId} status=${status} plan=${plan}`);
+          logger.info({ eventType: event.type, customerId, status, plan }, "Stripe subscription updated");
         }
       }
     } catch (error) {
-      console.error(`[Stripe webhook] Handler error for ${event.type}`, error);
+      logger.error({ eventType: event.type, error }, "Stripe webhook handler error");
     }
   })();
 };
@@ -225,17 +274,12 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session): Promis
   const plan = session.metadata?.plan;
 
   if (!userId) {
-    console.error("[Stripe webhook] checkout.session.completed: missing metadata.userId", {
-      sessionId: session.id
-    });
+    logger.error({ sessionId: session.id }, "Stripe checkout.session.completed missing metadata.userId");
     return;
   }
 
   if (plan !== "pro" && plan !== "premium") {
-    console.error("[Stripe webhook] checkout.session.completed: invalid metadata.plan", {
-      sessionId: session.id,
-      plan
-    });
+    logger.error({ sessionId: session.id, plan }, "Stripe checkout.session.completed invalid metadata.plan");
     return;
   }
 
@@ -244,7 +288,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session): Promis
     select: { stripeCustomerId: true, stripeSubscriptionId: true }
   });
   if (!existingUser) {
-    console.error(`[Stripe webhook] User not found: ${userId}`);
+    logger.error({ userId }, "Stripe checkout user not found");
     return;
   }
 
@@ -261,21 +305,19 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session): Promis
     }
   });
 
-  console.log(`[Stripe webhook] User upgraded to ${plan}`);
+  logger.info({ userId, plan }, "Stripe user upgraded");
 }
 
 async function handleSubscriptionCancelled(subscription: Stripe.Subscription): Promise<void> {
   const userId = subscription.metadata?.userId;
   if (!userId) {
-    console.warn("[Stripe webhook] customer.subscription.deleted: missing metadata.userId", {
-      subscriptionId: subscription.id
-    });
+    logger.warn({ subscriptionId: subscription.id }, "Stripe customer.subscription.deleted missing metadata.userId");
     return;
   }
 
   const existingUser = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
   if (!existingUser) {
-    console.error(`[Stripe webhook] User not found: ${userId}`);
+    logger.error({ userId }, "Stripe subscription cancellation user not found");
     return;
   }
 
@@ -287,7 +329,7 @@ async function handleSubscriptionCancelled(subscription: Stripe.Subscription): P
     }
   });
 
-  console.log(`[Stripe webhook] Subscription canceled for user ${userId}`);
+  logger.info({ userId }, "Stripe subscription canceled");
 }
 
 app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
@@ -296,6 +338,7 @@ app.post("/stripe/webhook", express.raw({ type: "application/json" }), stripeWeb
 app.use(express.json({ limit: "200kb" }));
 app.use(basicRateLimit);
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+app.use("/gmail", gmailRouter);
 
 const store = {
   async saveJobs(userId: string, jobs: Array<{ title: string; company: string; url: string; source: string; applyEmail?: string | null }>): Promise<void> {
@@ -341,7 +384,7 @@ app.get("/health", (_req, res) => {
 app.use(requireAuth);
 app.use((req, _res, next) => {
   const user = req.user?.id || "anonymous";
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} user=${user}`);
+  logger.info({ method: req.method, path: req.path, user, timestamp: new Date().toISOString() }, "Incoming request");
   next();
 });
 
@@ -467,7 +510,7 @@ app.post("/profile/cv", basicRateLimit, cvUpload.single("cv"), async (req, res) 
       update: { rawText: text }
     });
   } catch (error) {
-    console.error("[CV upload] Text extraction failed (non-fatal):", error);
+    logger.error({ userId, error }, "CV text extraction failed");
   }
 
   res.json({ cvPath, cvOriginalName: req.file.originalname, cvUploadedAt: now });
@@ -536,7 +579,7 @@ app.patch("/profile/password", async (req, res) => {
     data: { password: hashed }
   });
 
-  console.log(`[Profile] Password changed for userId=${userId}`);
+  logger.info({ userId }, "Profile password changed");
   res.json({ success: true });
 });
 
@@ -637,7 +680,7 @@ app.get("/jobs", async (req, res) => {
   res.json(jobs);
 });
 
-app.post("/jobs/search", requirePlan("pro"), async (req, res) => {
+app.post("/jobs/search", requirePlan("pro"), requireGmail, async (req, res) => {
   const parsed = jobSearchSchema.safeParse(req.body);
 
   if (!parsed.success) {
@@ -661,24 +704,24 @@ app.post("/jobs/search", requirePlan("pro"), async (req, res) => {
 
   try {
     const jobs = await searchQueue.enqueue(() =>
-      scrapeMatchAndStoreJobs(
+      scrapeMatchAndStoreJobs({
         userId,
-        {
+        input: {
           keywords: parsed.data.keywords,
           location: parsed.data.location,
           limitPerSource: parsed.data.limitPerSource ?? 5
         },
         store,
-        AUTO_APPLY_MIN_SCORE
-      )
+        minScore: AUTO_APPLY_MIN_SCORE
+      })
     );
     res.json({ jobs });
-  } catch (error: any) {
-    res.status(500).json({ error: error?.message || "job search failed" });
+  } catch (error: unknown) {
+    res.status(500).json({ error: getErrorMessage(error, "job search failed") });
   }
 });
 
-app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
+app.post("/jobs/auto-apply", requirePlan("premium"), requireGmail, async (req, res) => {
   const parsed = jobSearchSchema.safeParse(req.body);
 
   if (!parsed.success) {
@@ -702,21 +745,21 @@ app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
 
   try {
     const result = await searchQueue.enqueue(async () => {
-      console.log(`[auto-apply] start user=${userId} keywords="${parsed.data.keywords}"`);
-      const rankedJobs = await scrapeMatchAndStoreJobs(
+      logger.info({ userId, keywords: parsed.data.keywords }, "Auto-apply started");
+      const rankedJobs = await scrapeMatchAndStoreJobs({
         userId,
-        {
+        input: {
           keywords: parsed.data.keywords,
           location: parsed.data.location,
           limitPerSource: parsed.data.limitPerSource ?? 5
         },
         store,
-        AUTO_APPLY_MIN_SCORE
-      );
-      console.log(`[auto-apply] ranked jobs=${rankedJobs.length}`);
+        minScore: AUTO_APPLY_MIN_SCORE
+      });
+      logger.info({ userId, rankedJobs: rankedJobs.length }, "Auto-apply ranked jobs");
 
       const candidates = rankedJobs.filter((job) => job.score >= AUTO_APPLY_MIN_SCORE).slice(0, AUTO_APPLY_LIMIT);
-      console.log(`[auto-apply] selected jobs=${candidates.length}`);
+      logger.info({ userId, selectedJobs: candidates.length }, "Auto-apply selected jobs");
 
       const applied: AutoAppliedJob[] = [];
       const skipped: AutoApplySkippedJob[] = [];
@@ -724,10 +767,10 @@ app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
       for (let index = 0; index < candidates.length; index += 1) {
         const job = candidates[index];
         if (!job) continue;
-        console.log(`[auto-apply] applying ${index + 1}/${candidates.length} title="${job.title}" score=${job.score}`);
+        logger.info({ userId, index: index + 1, total: candidates.length, title: job.title, score: job.score }, "Auto-apply attempting job");
 
         if (!job.applyEmail) {
-          console.log(`[auto-apply] skip missing email title="${job.title}"`);
+          logger.info({ userId, title: job.title }, "Auto-apply skipped missing recipient email");
           skipped.push({ title: job.title, company: job.company, url: job.url, score: job.score, reason: "missing_apply_email" });
           continue;
         }
@@ -741,29 +784,50 @@ app.post("/jobs/auto-apply", requirePlan("premium"), async (req, res) => {
               jobDescription: job.description,
               store
             });
-            return approveAndSendApplication(userId, application.id, store);
+            const coverLetter = parseCoverLetterContent(application.coverLetter, application.title, application.company);
+            const recipientTo = application.email ?? job.applyEmail;
+            if (!recipientTo) {
+              throw new Error("NO_RECIPIENT_EMAIL");
+            }
+            await prisma.application.update({
+              where: { id_userId: { id: application.id, userId } },
+              data: { status: "approved" }
+            });
+            const { emailQueue } = await import("./queues/email.queue.js");
+            await emailQueue.add("application-email", {
+              userId,
+              type: "application",
+              to: recipientTo,
+              subject: coverLetter.subject,
+              htmlBody: buildEmailHtml(coverLetter),
+              applicationId: application.id,
+              cvPath: user.cvPath ?? undefined
+            });
+            return prisma.application.findFirstOrThrow({
+              where: { id: application.id, userId }
+            });
           });
           applied.push({ title: job.title, company: job.company, url: job.url, score: job.score, applicationId: sent.id });
-          console.log(`[auto-apply] sent application id=${sent.id}`);
-        } catch (error: any) {
-          console.log(`[auto-apply] failed title="${job.title}" error="${error?.message || "unknown"}"`);
+          logger.info({ userId, applicationId: sent.id, title: job.title }, "Auto-apply queued application");
+        } catch (error: unknown) {
+          logger.error({ userId, title: job.title, error: getErrorMessage(error, "unknown") }, "Auto-apply failed");
           skipped.push({ title: job.title, company: job.company, url: job.url, score: job.score, reason: "apply_failed" });
         }
 
         if (index < candidates.length - 1) {
           const delayMs = randomInt(AUTO_APPLY_DELAY_RANGE_MS.min, AUTO_APPLY_DELAY_RANGE_MS.max);
-          console.log(`[auto-apply] waiting ${delayMs}ms before next application`);
+          logger.info({ userId, delayMs }, "Auto-apply waiting before next application");
           await delay(delayMs);
         }
       }
 
-      console.log(`[auto-apply] completed applied=${applied.length} skipped=${skipped.length}`);
+      logger.info({ userId, applied: applied.length, skipped: skipped.length }, "Auto-apply completed");
       return { rankedJobs, applied, skipped };
     });
 
     res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error?.message || "auto-apply failed" });
+  } catch (error: unknown) {
+    res.status(500).json({ error: getErrorMessage(error, "auto-apply failed") });
   }
 });
 
@@ -807,11 +871,11 @@ app.post("/applications/apply", async (req, res) => {
       })) ?? 0;
     } catch (error) {
       monthlyCount = 0;
-      console.error(`[applications] failed-to-count-usage user=${userId}`, error);
+      logger.error({ userId, error }, "Applications usage count failed");
     }
 
     if (monthlyCount >= FREE_PLAN_MONTHLY_LIMIT) {
-      console.log(`[applications] free-plan-limit-reached user=${userId} count=${monthlyCount}`);
+      logger.info({ userId, monthlyCount }, "Applications free-plan limit reached");
       res.status(403).json({
         error: `Free plan limit reached (${FREE_PLAN_MONTHLY_LIMIT} applications/month). Upgrade required.`,
         code: "FREE_LIMIT_REACHED",
@@ -839,10 +903,14 @@ app.post("/applications/apply", async (req, res) => {
   const trimmedEmail = parsed.data.email?.trim();
 
   if (trimmedEmail && trimmedEmail !== job.applyEmail) {
-    await prisma.job.update({
-      where: { id: parsed.data.jobId },
+    const updatedCount = await prisma.job.updateMany({
+      where: { id: parsed.data.jobId, userId },
       data: { applyEmail: trimmedEmail }
-    }).catch(() => undefined);
+    }).catch(() => ({ count: 0 }));
+    if (updatedCount.count === 0) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
   }
 
   try {
@@ -858,8 +926,8 @@ app.post("/applications/apply", async (req, res) => {
 
 
     res.status(201).json(application);
-  } catch (error: any) {
-    res.status(500).json({ error: error?.message || "application pipeline failed" });
+  } catch (error: unknown) {
+    res.status(500).json({ error: getErrorMessage(error, "application pipeline failed") });
   }
 });
 
@@ -886,18 +954,18 @@ app.get("/applications/:id/preview", async (req, res) => {
   });
 });
 
-app.post("/applications/:id/approve", requirePlan("pro"), async (req, res) => {
+app.post("/applications/:id/approve", requirePlan("pro"), requireGmail, async (req, res) => {
   const userId = req.user!.id;
   const applicationId = getFirstParam(req.params.id);
   if (!applicationId) {
     res.status(400).json({ error: "Invalid application id" });
     return;
   }
-  let current: { title: string; email: string | null } | null = null;
+  let current: { id: string; title: string; company: string; email: string | null; coverLetter: string } | null = null;
   try {
     current = await prisma.application.findFirst({
       where: { id: applicationId, userId },
-      select: { title: true, email: true }
+      select: { id: true, title: true, company: true, email: true, coverLetter: true }
     });
     if (!current) {
       res.status(404).json({ error: "Application not found" });
@@ -909,14 +977,39 @@ app.post("/applications/:id/approve", requirePlan("pro"), async (req, res) => {
       return;
     }
 
-    const application = await applicationQueue.enqueue(() => approveAndSendApplication(userId, applicationId, store));
-    res.json(application);
-  } catch (error: any) {
-    if (error?.message === "NO_RECIPIENT_EMAIL") {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { cvPath: true }
+    });
+    const coverLetter = parseCoverLetterContent(current.coverLetter, current.title, current.company);
+
+    await prisma.application.update({
+      where: { id_userId: { id: applicationId, userId } },
+      data: { status: "approved" }
+    });
+
+    const { emailQueue } = await import("./queues/email.queue.js");
+    await emailQueue.add("application-email", {
+      userId,
+      type: "application",
+      to: current.email,
+      subject: coverLetter.subject,
+      htmlBody: buildEmailHtml(coverLetter),
+      applicationId: current.id,
+      cvPath: user?.cvPath ?? undefined
+    });
+
+    const updated = await prisma.application.findFirst({
+      where: { id: applicationId, userId }
+    });
+
+    res.json({ queueStatus: "queued", applicationStatus: updated?.status ?? "approved", application: updated });
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "NO_RECIPIENT_EMAIL") {
       res.status(422).json({ error: "NO_RECIPIENT_EMAIL", jobTitle: current?.title || "Unknown role" });
       return;
     }
-    res.status(400).json({ error: error?.message || "approval failed" });
+    res.status(400).json({ error: getErrorMessage(error, "approval failed") });
   }
 });
 
@@ -944,8 +1037,8 @@ app.post("/applications/:id/reject", requirePlan("pro"), async (req, res) => {
       data: { status: "rejected" }
     });
     res.json(updated);
-  } catch (error: any) {
-    res.status(400).json({ error: error?.message || "rejection failed" });
+  } catch (error: unknown) {
+    res.status(400).json({ error: getErrorMessage(error, "rejection failed") });
   }
 });
 
@@ -961,5 +1054,5 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 
 const port = Number(process.env.API_PORT || 4000);
 server.listen(port, () => {
-  console.log(`API running on http://localhost:${port}`);
+  logger.info({ port }, "API server started");
 });

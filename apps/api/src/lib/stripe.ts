@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { logger } from "./logger.js";
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "";
 const stripePricePro = process.env.STRIPE_PRO_PRICE_ID || process.env.STRIPE_PRICE_PRO || process.env.STRIPE_PRICE_ID || "";
@@ -12,7 +13,7 @@ if (process.env.NODE_ENV === "production" && !hasStripeSecret) {
 }
 
 if (process.env.NODE_ENV !== "production" && (!hasStripeSecret || !hasAnyPriceConfig)) {
-  console.warn("Stripe disabled in development: missing STRIPE_SECRET_KEY or Stripe price configuration");
+  logger.warn({ hasStripeSecret, hasAnyPriceConfig }, "Stripe disabled in development");
 }
 
 export const stripeEnabled = hasStripeSecret && hasAnyPriceConfig;
