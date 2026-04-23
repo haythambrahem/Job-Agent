@@ -446,11 +446,12 @@ class JobScraperService {
         extractedJobs,
         SCRAPER_SOURCE_CONFIG.linkedin.maxConcurrentRequests,
         async (job): Promise<ScrapedJob> => {
-          const detailPage = await context.newPage();
+          let detailPage: import("playwright").Page | undefined;
           let description = getDescriptionOrDefault(job);
           let applyEmail: string | null = null;
 
           try {
+            detailPage = await context.newPage();
             await gotoAndStabilize(detailPage, "linkedin", job.applyUrl);
             const detailDescription =
               (await detailPage
@@ -467,7 +468,7 @@ class JobScraperService {
           } catch (error) {
             logger.debug({ source: "linkedin", url: job.applyUrl, error: this.toErrorMessage(error) }, "linkedin detail enrichment failed");
           } finally {
-            await detailPage.close().catch(() => undefined);
+            await detailPage?.close().catch(() => undefined);
           }
 
           return {
@@ -499,8 +500,12 @@ class JobScraperService {
       await gotoAndStabilize(page, "indeed", url);
       await humanDelayFor("indeed");
       const jobs = await page.evaluate(
-        (innerLimit: number) =>
-          Array.from(document.querySelectorAll(".job_seen_beacon, .result, [data-testid='slider_item'], li"))
+        (innerLimit: number) => {
+          const resolveUrl = (href: string): string => {
+            if (!href) return "";
+            try { return new URL(href, window.location.origin).toString(); } catch { return href; }
+          };
+          return Array.from(document.querySelectorAll(".job_seen_beacon, .result, [data-testid='slider_item'], li"))
             .slice(0, innerLimit)
             .map((card) => {
               const title = card.querySelector("h2 a span, [data-testid='jobTitle']")?.textContent?.trim() ?? "";
@@ -511,9 +516,10 @@ class JobScraperService {
                 (card.querySelector("h2 a") as HTMLAnchorElement | null)?.getAttribute("href")?.trim() ??
                 (card.querySelector("a[data-jk]") as HTMLAnchorElement | null)?.getAttribute("href")?.trim() ??
                 "";
-              return { title, company, description, locationText, applyUrl: absolutizeUrl(link, "indeed") };
+              return { title, company, description, locationText, applyUrl: resolveUrl(link) };
             })
-            .filter((job) => job.title && job.applyUrl),
+            .filter((job) => job.title && job.applyUrl);
+        },
         limit
       );
 
@@ -548,27 +554,38 @@ class JobScraperService {
     try {
       await gotoAndStabilize(page, "tanitjobs", url);
       await humanDelayFor("tanitjobs");
-      const jobs = await page.evaluate(
-        (innerLimit: number) =>
-          Array.from(document.querySelectorAll("article, .job-item, .search-results li, .media, li"))
-            .slice(0, innerLimit)
-            .map((card) => {
-              const title = card.querySelector("h2 a, h3 a, .job-title a, .media-heading a, a")?.textContent?.trim() ?? "";
-              const company =
-                card.querySelector(".company, .job-company, .listing-company, .media-body .small")?.textContent?.trim() ?? "";
-              const description = card.querySelector(".description, .job-description, p")?.textContent?.trim() ?? "";
-              const locationText = card.querySelector(".location, .job-location, .listing-location")?.textContent?.trim() ?? "";
-              const href =
-                (card.querySelector("h2 a, h3 a, .job-title a, .media-heading a, a") as HTMLAnchorElement | null)?.getAttribute(
-                  "href"
-                )?.trim() ?? "";
-              return { title, company, description, locationText, applyUrl: absolutizeUrl(href, "tanitjobs") };
-            })
-            .filter((job) => job.title && job.applyUrl),
-        limit
-      );
+
+      const tanitEvaluator = (innerLimit: number) => {
+        const resolveUrl = (href: string): string => {
+          if (!href) return "";
+          try { return new URL(href, window.location.origin).toString(); } catch { return href; }
+        };
+        return Array.from(document.querySelectorAll("article, .job-item, .job, .media, .card, .search-results li, li"))
+          .slice(0, innerLimit)
+          .map((card) => {
+            const title = card.querySelector("h2 a, h3 a, .job-title a, .media-heading a, a")?.textContent?.trim() ?? "";
+            const company =
+              card.querySelector(".company, .job-company, .listing-company, .media-body .small")?.textContent?.trim() ?? "";
+            const description = card.querySelector(".description, .job-description, p")?.textContent?.trim() ?? "";
+            const locationText = card.querySelector(".location, .job-location, .listing-location")?.textContent?.trim() ?? "";
+            const href =
+              (card.querySelector("h2 a, h3 a, .job-title a, .media-heading a, a") as HTMLAnchorElement | null)?.getAttribute(
+                "href"
+              )?.trim() ?? "";
+            return { title, company, description, locationText, applyUrl: resolveUrl(href) };
+          })
+          .filter((job) => job.title && job.applyUrl);
+      };
+
+      const jobs = await page.evaluate(tanitEvaluator, limit);
 
       let extractedJobs = jobs as ExtractedJob[];
+      if (extractedJobs.length === 0) {
+        logger.warn({ source: "tanitjobs" }, "no jobs on first pass, waiting 5s before retry");
+        await page.waitForTimeout(5000);
+        const retryJobs = await page.evaluate(tanitEvaluator, limit);
+        extractedJobs = retryJobs as ExtractedJob[];
+      }
       if (extractedJobs.length === 0) {
         const html = await page.content().catch(() => "");
         extractedJobs = parseJobsFromHtmlFallback(html, "tanitjobs", limit, args.location);
