@@ -1,16 +1,19 @@
-// Updated parseJobsFromHtmlFallback to inline URL resolution logic
+// Assuming there are imports above
 
-parseJobsFromHtmlFallback(html) {
-  // ...existing code...
+// ... other code ...
 
-  const absolutizeUrl = (relativeUrl) => {
-    const baseUrl = 'https://example.com'; // Set base URL accordingly
-    return new URL(relativeUrl, baseUrl).href;
-  };
+function parseJobsFromHtmlFallback(html) {
+    // ... other logic ...
 
-  // Logic to parse jobs from html and use absolutizeUrl
-  const jobLinks = this.extractJobLinksFromHtml(html);
-  const absoluteLinks = jobLinks.map(link => absolutizeUrl(link));
+    const absolutizeUrl = (url) => {
+        // Your logic to convert relative URLs to absolute
+        return new URL(url, 'https://www.example.com').href;
+    };
 
-  // ...rest of the existing code...
+    // Use absolutizeUrl logic directly here
+    const absoluteUrl = absolutizeUrl(relativeJobUrl);
+
+    // ... rest of your logic ...
 }
+
+// ... other code ...
