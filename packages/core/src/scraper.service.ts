@@ -169,12 +169,27 @@ function parseJobsFromHtmlFallback(html: string, source: JobSource, limit: numbe
     if (!title || title.length < 4) continue;
     const windowStart = Math.max(0, (match.index ?? 0) - 350);
     const windowEnd = Math.min(html.length, (match.index ?? 0) + 700);
+
+    const trimmed = href.trim();
+    let applyUrl = "";
+    if (trimmed) {
+      if (trimmed.startsWith("http")) {
+        applyUrl = trimmed;
+      } else if (source === "indeed") {
+        applyUrl = `https://fr.indeed.com${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
+      } else if (source === "tanitjobs") {
+        applyUrl = `https://www.tanitjobs.com${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
+      } else {
+        applyUrl = `https://www.linkedin.com${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
+      }
+    }
+
     jobs.push({
       title,
       company: source === "tanitjobs" ? "Unknown company" : "Unknown",
       description: stripTags(html.slice(windowStart, windowEnd)),
       locationText: location ?? "Unknown",
-      applyUrl: absolutizeUrl(href, source)
+      applyUrl
     });
   }
 
