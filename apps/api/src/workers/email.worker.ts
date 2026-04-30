@@ -52,7 +52,7 @@ export const emailWorker = new Worker<EmailJobData>(
 
       const attachments: Array<{ filename: string; mimeType: string; data: Buffer }> = [];
       if (cvPath) {
-        const fullPath = path.join(process.cwd(), "apps/api", cvPath);
+        const fullPath = path.join(process.cwd(), cvPath);
         const data = await readFile(fullPath);
         const filename = path.basename(fullPath) || "cv.pdf";
         attachments.push({
