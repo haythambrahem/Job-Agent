@@ -68,5 +68,9 @@ export const SCRAPER_ANTIBOT_PROFILES = {
     { width: 1440, height: 900 },
     { width: 1536, height: 864 },
     { width: 1600, height: 900 }
-  ] as const
+  ] as const,
+  locales: ["en-US", "fr-FR", "en-GB"] as const,
+  timezones: ["Europe/Paris", "Africa/Tunis", "Europe/London"] as const,
+  deviceScaleFactors: [1, 2] as const,
+  colorSchemes: ["light", "dark"] as const
 };
