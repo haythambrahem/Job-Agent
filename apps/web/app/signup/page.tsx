@@ -43,70 +43,121 @@ export default function SignUpPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-slate-950 to-slate-900 flex items-center justify-center px-4">
-      <div className="w-full max-w-md bg-slate-800 border border-slate-700 rounded-xl p-8 shadow-xl">
-        <h1 className="text-3xl font-bold text-white mb-2">Create Account</h1>
-        <p className="text-slate-400 mb-8">Get started with Job Agent for free</p>
-
-        <form onSubmit={onSubmit} className="space-y-6">
-          <div className="space-y-2">
-            <label htmlFor="email" className="block text-sm font-medium text-white">
-              Email Address
-            </label>
-            <input 
-              id="email"
-              type="email" 
-              placeholder="you@example.com" 
-              required 
-              value={email} 
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-            />
+    <main className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex items-center justify-center px-4">
+      <div className="w-full max-w-md">
+        {/* Logo */}
+        <div className="text-center mb-8">
+          <div className="w-14 h-14 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-2xl mx-auto mb-4">
+            J
           </div>
+          <h1 className="text-3xl font-bold text-gray-900">Job Agent</h1>
+          <p className="text-gray-600 mt-2">Automate your job search</p>
+        </div>
 
-          <div className="space-y-2">
-            <label htmlFor="password" className="block text-sm font-medium text-white">
-              Password
-            </label>
-            <input
-              id="password"
-              type="password"
-              placeholder="••••••••"
-              required
-              minLength={8}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-            />
-            <p className="text-xs text-slate-400">Minimum 8 characters</p>
-          </div>
+        {/* Form Card */}
+        <div className="bg-white rounded-2xl shadow-md border border-gray-100 p-8 mb-6">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Create Your Account</h2>
+          <p className="text-gray-600 mb-8">Join thousands of job seekers automating their search</p>
 
-          {error && (
-            <div className="p-3 bg-red-900/20 border border-red-700 rounded-lg">
-              <p className="text-red-400 text-sm">{error}</p>
+          <form onSubmit={onSubmit} className="space-y-6">
+            {/* Email Input */}
+            <div>
+              <label htmlFor="email" className="block text-sm font-semibold text-gray-900 mb-2">
+                Email Address
+              </label>
+              <input
+                id="email"
+                type="email"
+                placeholder="you@example.com"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-0 transition-colors duration-200 placeholder-gray-400"
+              />
             </div>
-          )}
 
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-900 text-white font-semibold py-3 rounded-lg transition"
-          >
-            {loading ? "Creating Account..." : "Create Account"}
-          </button>
-        </form>
+            {/* Password Input */}
+            <div>
+              <label htmlFor="password" className="block text-sm font-semibold text-gray-900 mb-2">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                placeholder="••••••••"
+                required
+                minLength={8}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-0 transition-colors duration-200 placeholder-gray-400"
+              />
+              <p className="text-xs text-gray-500 mt-2">Minimum 8 characters</p>
+            </div>
 
-        <p className="mt-6 text-center text-slate-400">
+            {/* Terms Checkbox */}
+            <div className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                id="terms"
+                required
+                className="w-4 h-4 mt-1 rounded border-gray-300 text-blue-600 focus:ring-0"
+              />
+              <label htmlFor="terms" className="text-sm text-gray-600">
+                I agree to the{" "}
+                <a href="#" className="text-blue-600 hover:text-blue-700 font-medium">
+                  Terms of Service
+                </a>{" "}
+                and{" "}
+                <a href="#" className="text-blue-600 hover:text-blue-700 font-medium">
+                  Privacy Policy
+                </a>
+              </label>
+            </div>
+
+            {/* Error Message */}
+            {error && (
+              <div className="p-4 bg-red-50 border-l-4 border-red-500 rounded">
+                <p className="text-red-700 text-sm font-medium">{error}</p>
+              </div>
+            )}
+
+            {/* Sign Up Button */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold rounded-lg hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? "Creating Account..." : "Create Account"}
+            </button>
+          </form>
+
+          {/* Divider */}
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-200"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-white text-gray-500">Or sign up with</span>
+            </div>
+          </div>
+
+          {/* OAuth Buttons */}
+          <div className="grid grid-cols-2 gap-3">
+            <button className="py-2 px-3 border-2 border-gray-200 rounded-lg hover:border-gray-300 hover:bg-gray-50 transition-colors duration-200 text-sm font-medium text-gray-700">
+              Google
+            </button>
+            <button className="py-2 px-3 border-2 border-gray-200 rounded-lg hover:border-gray-300 hover:bg-gray-50 transition-colors duration-200 text-sm font-medium text-gray-700">
+              LinkedIn
+            </button>
+          </div>
+        </div>
+
+        {/* Sign In Link */}
+        <p className="text-center text-gray-600">
           Already have an account?{" "}
-          <Link href="/signin" className="text-blue-400 hover:text-blue-300 font-medium">
+          <Link href="/signin" className="text-blue-600 font-semibold hover:text-blue-700">
             Sign in
           </Link>
-        </p>
-
-        <hr className="my-6 border-slate-700" />
-
-        <p className="text-center text-xs text-slate-400">
-          By creating an account, you agree to our Terms of Service and Privacy Policy
         </p>
       </div>
     </main>

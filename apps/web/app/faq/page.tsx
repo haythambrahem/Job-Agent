@@ -4,9 +4,16 @@ import { generateFAQSchema } from "@/lib/schema";
 import FAQSection from "@/components/landing/FAQ";
 
 export const metadata: Metadata = {
-  title: "FAQ - Job Agent",
-  description: "Frequently asked questions about Job Agent, job automation, and how to maximize your job search success.",
-  keywords: ["job automation faq", "job agent questions", "job search help"],
+  title: "FAQ - Job Agent | Frequently Asked Questions",
+  description: "Get answers to common questions about Job Agent, job automation, AI matching, and how to maximize your job search success.",
+  keywords: ["job automation faq", "job agent questions", "job search help", "job automation explained", "AI job matching"],
+  openGraph: {
+    title: "FAQ - Job Agent | Common Questions About Job Automation",
+    description: "Find answers to frequently asked questions about Job Agent and job automation.",
+    type: "website",
+    url: "https://jobagent.app/faq",
+    siteName: "Job Agent",
+  },
 };
 
 const faqData = [

@@ -73,7 +73,7 @@ export default function Testimonials() {
   };
 
   return (
-    <section className="relative py-24 px-4 sm:px-6 lg:px-8">
+    <section className="py-24 px-4">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <motion.div
@@ -82,127 +82,58 @@ export default function Testimonials() {
           viewport={{ once: true }}
           className="text-center mb-16"
         >
-          <h2 className="text-4xl md:text-5xl font-bold text-white mb-4">
-            Loved by <span className="gradient-text">Job Seekers</span>
+          <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">
+            Loved by Job Seekers
           </h2>
-          <p className="text-xl text-slate-300 max-w-2xl mx-auto">
-            Join thousands of professionals who found their dream jobs faster with Job Agent
+          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+            Join thousands of professionals who found their dream jobs faster
           </p>
         </motion.div>
 
-        {/* Testimonial Carousel */}
-        <div className="relative h-96 mb-8">
-          <motion.div
-            key={current}
-            custom={direction}
-            variants={slideVariants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{
-              x: { type: 'spring', stiffness: 300, damping: 30 },
-              opacity: { duration: 0.5 }
-            }}
-            drag="x"
-            dragElastic={1}
-            dragConstraints={{ left: 0, right: 0 }}
-            dragTransition={{
-              power: 0.2,
-              restDelta: 50
-            }}
-            onDragEnd={(e, { offset, velocity }) => {
-              const swipe = swipePower(offset.x, velocity.x);
-
-              if (swipe < -swipeConfidenceThreshold) {
-                setDirection(1);
-                setCurrent((prev) => (prev + 1) % testimonials.length);
-              } else if (swipe > swipeConfidenceThreshold) {
-                setDirection(-1);
-                setCurrent((prev) => (prev - 1 + testimonials.length) % testimonials.length);
-              }
-            }}
-            className="absolute w-full"
-          >
-            <div className="glass rounded-2xl p-8 h-full flex flex-col justify-between">
-              {/* Stars */}
-              <div className="flex gap-1">
-                {Array(testimonials[current].rating).fill(null).map((_, i) => (
-                  <span key={i} className="text-2xl">⭐</span>
+        {/* Testimonials Grid */}
+        <div className="grid md:grid-cols-2 gap-8 mb-12">
+          {testimonials.map((testimonial, idx) => (
+            <motion.div
+              key={idx}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: idx * 0.1 }}
+              viewport={{ once: true }}
+              className="card"
+            >
+              <div className="flex gap-1 mb-4">
+                {Array(testimonial.rating).fill(null).map((_, i) => (
+                  <span key={i} className="text-lg">⭐</span>
                 ))}
               </div>
 
-              {/* Quote */}
-              <p className="text-2xl text-white leading-relaxed italic">
-                "{testimonials[current].text}"
+              <p className="text-gray-700 leading-relaxed mb-6 italic">
+                "{testimonial.text}"
               </p>
 
-              {/* Author */}
-              <div className="flex items-center gap-4 pt-4 border-t border-white/10">
-                <div className="text-5xl">{testimonials[current].image}</div>
+              <div className="flex items-center gap-4 pt-6 border-t border-gray-200">
+                <div className="text-4xl">{testimonial.image}</div>
                 <div>
-                  <p className="text-white font-semibold">{testimonials[current].name}</p>
-                  <p className="text-slate-400 text-sm">{testimonials[current].role}</p>
-                  <p className="text-slate-400 text-xs">{testimonials[current].company}</p>
+                  <p className="font-semibold text-gray-900">{testimonial.name}</p>
+                  <p className="text-sm text-gray-600">{testimonial.role}</p>
+                  <p className="text-xs text-gray-500">{testimonial.company}</p>
                 </div>
               </div>
-            </div>
-          </motion.div>
+            </motion.div>
+          ))}
         </div>
 
-        {/* Carousel Controls */}
-        <div className="flex items-center justify-center gap-4">
-          <button
-            onClick={() => {
-              setDirection(-1);
-              setCurrent((prev) => (prev - 1 + testimonials.length) % testimonials.length);
-            }}
-            className="glass hover:bg-white/10 text-white p-3 rounded-full transition"
-          >
-            ←
-          </button>
-
-          {/* Dots */}
-          <div className="flex gap-2">
-            {testimonials.map((_, idx) => (
-              <motion.button
-                key={idx}
-                onClick={() => {
-                  setDirection(idx > current ? 1 : -1);
-                  setCurrent(idx);
-                }}
-                animate={{
-                  scale: idx === current ? 1.2 : 1,
-                  backgroundColor: idx === current ? '#3b82f6' : 'rgba(255,255,255,0.1)'
-                }}
-                className="h-2 rounded-full transition"
-                style={{ width: idx === current ? 24 : 8 }}
-              />
-            ))}
-          </div>
-
-          <button
-            onClick={() => {
-              setDirection(1);
-              setCurrent((prev) => (prev + 1) % testimonials.length);
-            }}
-            className="glass hover:bg-white/10 text-white p-3 rounded-full transition"
-          >
-            →
-          </button>
-        </div>
-
-        {/* Logos */}
+        {/* Company logos */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
-          transition={{ delay: 0.3 }}
-          className="mt-16 pt-16 border-t border-white/10 text-center"
+          className="border-t border-gray-200 pt-12 text-center"
         >
-          <p className="text-slate-400 text-sm mb-8">Used by professionals from leading companies</p>
-          <div className="flex flex-wrap items-center justify-center gap-8 opacity-60">
+          <p className="text-gray-600 text-sm mb-8">Used by professionals from</p>
+          <div className="flex flex-wrap items-center justify-center gap-8">
             {['Google', 'Amazon', 'Microsoft', 'Meta', 'Apple'].map((company) => (
-              <div key={company} className="text-slate-400 font-semibold text-sm hover:text-white transition">
+              <div key={company} className="text-gray-600 font-semibold text-sm">
                 {company}
               </div>
             ))}
