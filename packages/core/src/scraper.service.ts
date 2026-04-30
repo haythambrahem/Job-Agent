@@ -1,4 +1,8 @@
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium } from "playwright-extra";
+import StealthPlugin from "playwright-extra-plugin-stealth";
+import type { Browser, BrowserContext, Page } from "playwright";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import pino from "pino";
 import type { ScrapedJob } from "./types.js";
 import {
@@ -49,6 +53,20 @@ type ExtractedJob = {
   applyUrl: string;
 };
 
+type NormalizedJobInput = ExtractedJob & {
+  source: JobSource;
+  applyEmail?: string | null;
+};
+
+type ProxySettings = {
+  server: string;
+  username?: string;
+  password?: string;
+  bypass?: string;
+};
+
+chromium.use(StealthPlugin());
+
 class CircuitBreaker {
   private consecutiveFailures = 0;
   private state: "closed" | "open" | "half_open" = "closed";
@@ -91,12 +109,50 @@ const logger = pino({
   },
 });
 
+const DEBUG_ARTIFACTS_ENABLED = process.env.SCRAPER_DEBUG === "true";
+const DEBUG_ARTIFACTS_DIR = process.env.SCRAPER_DEBUG_DIR ?? path.join(process.cwd(), "tmp", "scraper-debug");
+
+const PROXY_SERVERS = (process.env.SCRAPER_PROXY_SERVERS || process.env.SCRAPER_PROXY_SERVER || "")
+  .split(",")
+  .map((entry) => entry.trim())
+  .filter(Boolean);
+
+const DEFAULT_COMPANY = "Unknown company";
+const DEFAULT_LOCATION = "Unknown";
+const DEFAULT_TUNISIA_LOCATION = "Tunisie";
+
 function nowMs(): number {
   return Date.now();
 }
 
 function normalize(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function isPresent<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined;
+}
+
+function resolveBaseUrl(source: JobSource): string {
+  if (source === "indeed") return "https://fr.indeed.com";
+  if (source === "tanitjobs") return "https://www.tanitjobs.com";
+  return "https://www.linkedin.com";
+}
+
+function normalizeUrl(url: string, source: JobSource): string {
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  try {
+    const normalized = new URL(trimmed, resolveBaseUrl(source));
+    normalized.hash = "";
+    return normalized.toString();
+  } catch {
+    return "";
+  }
+}
+
+function isValidHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
 }
 
 function dedupe(jobs: ScrapedJob[]): ScrapedJob[] {
@@ -141,13 +197,25 @@ function pickRandom<T>(values: readonly T[]): T {
   return values[randomInt(0, values.length - 1)] ?? values[0];
 }
 
-function absolutizeUrl(url: string, source: JobSource): string {
-  const trimmed = url.trim();
-  if (!trimmed) return "";
-  if (trimmed.startsWith("http")) return trimmed;
-  if (source === "indeed") return `https://fr.indeed.com${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
-  if (source === "tanitjobs") return `https://www.tanitjobs.com${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
-  return `https://www.linkedin.com${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
+function normalizeScrapedJob(job: NormalizedJobInput, args: ScrapeJobsInput): ScrapedJob | null {
+  const title = normalize(job.title);
+  const company = normalize(job.company || DEFAULT_COMPANY);
+  const description = normalize(getDescriptionOrDefault(job));
+  const locationFallback = job.source === "tanitjobs" ? DEFAULT_TUNISIA_LOCATION : DEFAULT_LOCATION;
+  const location = normalize(job.locationText || args.location || locationFallback);
+  const url = normalizeUrl(job.applyUrl, job.source);
+  if (!title || !company || !description || !location || !isValidHttpUrl(url)) {
+    return null;
+  }
+  return {
+    title,
+    company,
+    description,
+    url,
+    source: job.source,
+    location,
+    applyEmail: job.applyEmail ? normalize(job.applyEmail) : undefined
+  };
 }
 
 function looksLikeJobUrl(href: string, source: JobSource): boolean {
@@ -171,10 +239,10 @@ function parseJobsFromHtmlFallback(html: string, source: JobSource, limit: numbe
     const windowEnd = Math.min(html.length, (match.index ?? 0) + 700);
     jobs.push({
       title,
-      company: source === "tanitjobs" ? "Unknown company" : "Unknown",
+      company: DEFAULT_COMPANY,
       description: stripTags(html.slice(windowStart, windowEnd)),
-      locationText: location ?? "Unknown",
-      applyUrl: absolutizeUrl(href, source)
+      locationText: location ?? DEFAULT_LOCATION,
+      applyUrl: normalizeUrl(href, source)
     });
   }
 
@@ -188,6 +256,12 @@ async function gotoAndStabilize(page: Page, source: JobSource, url: string): Pro
     timeout: SCRAPER_SOURCE_CONFIG[source].timeoutMs
   });
   await humanDelayFor(source);
+}
+
+function configurePage(page: Page, source: JobSource): void {
+  const timeoutMs = SCRAPER_SOURCE_CONFIG[source].timeoutMs;
+  page.setDefaultTimeout(timeoutMs);
+  page.setDefaultNavigationTimeout(timeoutMs);
 }
 
 async function mapWithConcurrency<T, R>(items: readonly T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<R[]> {
@@ -205,6 +279,18 @@ async function mapWithConcurrency<T, R>(items: readonly T[], concurrency: number
 
   await Promise.all(runners);
   return results;
+}
+
+function buildProxySettings(): ProxySettings | undefined {
+  if (PROXY_SERVERS.length === 0) return undefined;
+  const server = pickRandom(PROXY_SERVERS);
+  const username = process.env.SCRAPER_PROXY_USERNAME?.trim();
+  const password = process.env.SCRAPER_PROXY_PASSWORD?.trim();
+  return {
+    server,
+    username: username || undefined,
+    password: password || undefined
+  };
 }
 
 class JobScraperService {
@@ -243,18 +329,33 @@ class JobScraperService {
       tanitjobs: this.createSourceMetric("tanitjobs")
     };
 
-    const browser = await chromium.launch({ headless: process.env.SCRAPER_HEADLESS !== "false" });
+    const browser = await chromium.launch({
+      headless: process.env.SCRAPER_HEADLESS !== "false"
+    });
     try {
-      const results = await Promise.all(
+      logger.info({ keywords: args.keywords, location: args.location, sources: SCRAPER_SOURCES }, "scrape started");
+
+      const results = await Promise.allSettled(
         SCRAPER_SOURCES.map(async (source) => {
           sourceTimers[source] = nowMs();
-          const jobs = await this.scrapeSource(browser, source, args, sourceMetrics[source]);
-          sourceMetrics[source].executionMs = nowMs() - sourceTimers[source];
-          return jobs;
+          try {
+            return await this.scrapeSource(browser, source, args, sourceMetrics[source]);
+          } finally {
+            sourceMetrics[source].executionMs = nowMs() - sourceTimers[source];
+          }
         })
       );
 
-      const merged = results.flat();
+      const merged = results.flatMap((result, index) => {
+        const source = SCRAPER_SOURCES[index];
+        if (!source) return [];
+        if (result.status === "fulfilled") return result.value;
+        const errorMessage = this.toErrorMessage(result.reason);
+        sourceMetrics[source].failures += 1;
+        sourceMetrics[source].lastError = errorMessage;
+        logger.error({ source, error: errorMessage }, "source scrape crashed");
+        return [];
+      });
       const deduped = dedupe(merged);
       const finishedAtMs = nowMs();
       const metrics = this.createMetricsSkeleton(
@@ -279,8 +380,18 @@ class JobScraperService {
 
       return { jobs: deduped, metrics };
     } catch (error) {
+      const finishedAtMs = nowMs();
+      const metrics = this.createMetricsSkeleton(
+        startedAt,
+        new Date(finishedAtMs).toISOString(),
+        finishedAtMs - startedAtMs,
+        0,
+        0,
+        sourceMetrics
+      );
+      this.lastMetrics = metrics;
       logger.error({ error: this.toErrorMessage(error) }, "scrape failed unexpectedly");
-      throw error;
+      return { jobs: [], metrics };
     } finally {
       await browser.close().catch(() => undefined);
     }
@@ -351,6 +462,7 @@ class JobScraperService {
     }
 
     try {
+      logger.info({ source }, "source scrape started");
       const jobs = await this.withRetry(source, metrics, async () => {
         if (source === "linkedin") return this.scrapeLinkedIn(browser, args);
         if (source === "indeed") return this.scrapeIndeed(browser, args);
@@ -399,17 +511,48 @@ class JobScraperService {
     throw new Error(`Unexpected retry exit for ${source}`);
   }
 
-  private async createHumanContext(browser: Browser): Promise<BrowserContext> {
+  private async createHumanContext(browser: Browser, source: JobSource): Promise<BrowserContext> {
+    const proxy = buildProxySettings();
+    if (proxy) {
+      logger.info({ source, proxyServer: proxy.server }, "proxy enabled for context");
+    }
     return browser.newContext({
       userAgent: pickRandom(SCRAPER_ANTIBOT_PROFILES.userAgents),
       viewport: pickRandom(SCRAPER_ANTIBOT_PROFILES.viewports),
-      locale: "en-US"
+      locale: pickRandom(SCRAPER_ANTIBOT_PROFILES.locales),
+      timezoneId: pickRandom(SCRAPER_ANTIBOT_PROFILES.timezones),
+      deviceScaleFactor: pickRandom(SCRAPER_ANTIBOT_PROFILES.deviceScaleFactors),
+      colorScheme: pickRandom(SCRAPER_ANTIBOT_PROFILES.colorSchemes),
+      proxy
     });
   }
 
+  private async captureDebugArtifacts(page: Page, source: JobSource, label: string): Promise<void> {
+    if (!DEBUG_ARTIFACTS_ENABLED) return;
+    try {
+      await fs.mkdir(DEBUG_ARTIFACTS_DIR, { recursive: true });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const safeLabel = label.replace(/[^a-z0-9-_]+/gi, "-");
+      const baseName = `${source}-${safeLabel}-${timestamp}`;
+      const htmlPath = path.join(DEBUG_ARTIFACTS_DIR, `${baseName}.html`);
+      const screenshotPath = path.join(DEBUG_ARTIFACTS_DIR, `${baseName}.png`);
+      const [html] = await Promise.all([
+        page.content().catch(() => ""),
+        page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined)
+      ]);
+      if (html) {
+        await fs.writeFile(htmlPath, html, "utf8");
+      }
+      logger.warn({ source, htmlPath, screenshotPath }, "saved debug artifacts");
+    } catch (error) {
+      logger.debug({ source, error: this.toErrorMessage(error) }, "failed to save debug artifacts");
+    }
+  }
+
   private async scrapeLinkedIn(browser: Browser, args: ScrapeJobsInput): Promise<ScrapedJob[]> {
-    const context = await this.createHumanContext(browser);
+    const context = await this.createHumanContext(browser, "linkedin");
     const page = await context.newPage();
+    configurePage(page, "linkedin");
     const limit = args.limitPerSource ?? 10;
     const query = encodeURIComponent(args.keywords);
     const location = encodeURIComponent(args.location ?? "");
@@ -419,8 +562,12 @@ class JobScraperService {
       await gotoAndStabilize(page, "linkedin", url);
       await humanDelayFor("linkedin");
       const jobs = await page.evaluate(
-        (innerLimit: number) =>
-          Array.from(document.querySelectorAll(".base-card, .job-search-card, li"))
+        (innerLimit: number) => {
+          const resolveUrl = (href: string): string => {
+            if (!href) return "";
+            try { return new URL(href, window.location.origin).toString(); } catch { return href; }
+          };
+          return Array.from(document.querySelectorAll(".base-card, .job-search-card, li"))
             .slice(0, innerLimit)
             .map((card) => {
               const title = card.querySelector("h3, .base-search-card__title")?.textContent?.trim() ?? "";
@@ -428,10 +575,13 @@ class JobScraperService {
               const description =
                 card.querySelector(".base-search-card__metadata, .job-search-card__snippet, p")?.textContent?.trim() ?? "";
               const locationText = card.querySelector(".job-search-card__location")?.textContent?.trim() ?? "";
-              const applyUrl = (card.querySelector("a.base-card__full-link, a") as HTMLAnchorElement | null)?.href?.trim() ?? "";
+              const link = (card.querySelector("a.base-card__full-link, a") as HTMLAnchorElement | null);
+              const href = link?.getAttribute("href")?.trim() ?? link?.href?.trim() ?? "";
+              const applyUrl = resolveUrl(href);
               return { title, company, description, locationText, applyUrl };
             })
-            .filter((job) => job.title && job.applyUrl),
+            .filter((job) => job.title && job.applyUrl);
+        },
         limit
       );
 
@@ -441,47 +591,58 @@ class JobScraperService {
         extractedJobs = parseJobsFromHtmlFallback(html, "linkedin", limit, args.location);
         logger.warn({ source: "linkedin" }, "using html fallback parser");
       }
+      if (extractedJobs.length === 0) {
+        await this.captureDebugArtifacts(page, "linkedin", "empty-results");
+      }
 
-      return mapWithConcurrency(
+      const normalized = await mapWithConcurrency(
         extractedJobs,
         SCRAPER_SOURCE_CONFIG.linkedin.maxConcurrentRequests,
-        async (job): Promise<ScrapedJob> => {
-          let detailPage: import("playwright").Page | undefined;
+        async (job): Promise<ScrapedJob | null> => {
+          let detailPage: Page | undefined;
           let description = getDescriptionOrDefault(job);
           let applyEmail: string | null = null;
 
           try {
-            detailPage = await context.newPage();
-            await gotoAndStabilize(detailPage, "linkedin", job.applyUrl);
-            const detailDescription =
-              (await detailPage
-                .innerText(".show-more-less-html__markup, .description__text, .jobs-description__content")
-                .catch(() => "")) || stripTags(await detailPage.content().catch(() => ""));
+            const detailUrl = normalizeUrl(job.applyUrl, "linkedin");
+            if (detailUrl) {
+              detailPage = await context.newPage();
+              configurePage(detailPage, "linkedin");
+              await gotoAndStabilize(detailPage, "linkedin", detailUrl);
+              const detailDescription =
+                (await detailPage
+                  .innerText(".show-more-less-html__markup, .description__text, .jobs-description__content")
+                  .catch(() => "")) || stripTags(await detailPage.content().catch(() => ""));
 
-            if (normalize(detailDescription)) {
-              description = normalize(detailDescription);
+              if (normalize(detailDescription)) {
+                description = normalize(detailDescription);
+              }
+
+              const html = await detailPage.content().catch(() => "");
+              const mailtoMatch = html.match(/mailto:([^\"'?>\s]+)/i);
+              applyEmail = mailtoMatch?.[1] ? mailtoMatch[1].split("?")[0].trim() : extractEmailFromText(stripTags(html));
             }
-
-            const html = await detailPage.content().catch(() => "");
-            const mailtoMatch = html.match(/mailto:([^\"'?>\s]+)/i);
-            applyEmail = mailtoMatch?.[1] ? mailtoMatch[1].split("?")[0].trim() : extractEmailFromText(stripTags(html));
           } catch (error) {
             logger.debug({ source: "linkedin", url: job.applyUrl, error: this.toErrorMessage(error) }, "linkedin detail enrichment failed");
           } finally {
             await detailPage?.close().catch(() => undefined);
           }
 
-          return {
-            title: normalize(job.title),
-            company: normalize(job.company || "Unknown"),
-            description,
-            url: job.applyUrl,
-            source: "linkedin",
-            location: normalize(job.locationText || args.location || "Unknown"),
-            applyEmail
-          };
+          return normalizeScrapedJob(
+            {
+              ...job,
+              description,
+              source: "linkedin",
+              applyEmail
+            },
+            args
+          );
         }
       );
+      return normalized.filter(isPresent);
+    } catch (error) {
+      await this.captureDebugArtifacts(page, "linkedin", "list-error");
+      throw error;
     } finally {
       await page.close().catch(() => undefined);
       await context.close().catch(() => undefined);
@@ -489,8 +650,9 @@ class JobScraperService {
   }
 
   private async scrapeIndeed(browser: Browser, args: ScrapeJobsInput): Promise<ScrapedJob[]> {
-    const context = await this.createHumanContext(browser);
+    const context = await this.createHumanContext(browser, "indeed");
     const page = await context.newPage();
+    configurePage(page, "indeed");
     const limit = args.limitPerSource ?? 10;
     const query = encodeURIComponent(args.keywords);
     const location = encodeURIComponent(args.location ?? "");
@@ -529,15 +691,24 @@ class JobScraperService {
         extractedJobs = parseJobsFromHtmlFallback(html, "indeed", limit, args.location);
         logger.warn({ source: "indeed" }, "using html fallback parser");
       }
+      if (extractedJobs.length === 0) {
+        await this.captureDebugArtifacts(page, "indeed", "empty-results");
+      }
 
-      return extractedJobs.map((job) => ({
-        title: normalize(job.title),
-        company: normalize(job.company || "Unknown"),
-        description: getDescriptionOrDefault(job),
-        url: job.applyUrl,
-        source: "indeed",
-        location: normalize(job.locationText || args.location || "Unknown")
-      }));
+      return extractedJobs
+        .map((job) =>
+          normalizeScrapedJob(
+            {
+              ...job,
+              source: "indeed"
+            },
+            args
+          )
+        )
+        .filter(isPresent);
+    } catch (error) {
+      await this.captureDebugArtifacts(page, "indeed", "list-error");
+      throw error;
     } finally {
       await page.close().catch(() => undefined);
       await context.close().catch(() => undefined);
@@ -545,45 +716,123 @@ class JobScraperService {
   }
 
   private async scrapeTanitJobs(browser: Browser, args: ScrapeJobsInput): Promise<ScrapedJob[]> {
-    const context = await this.createHumanContext(browser);
+    const context = await this.createHumanContext(browser, "tanitjobs");
     const page = await context.newPage();
+    configurePage(page, "tanitjobs");
     const limit = args.limitPerSource ?? 10;
     const query = encodeURIComponent(args.keywords);
     const url = `https://www.tanitjobs.com/jobs/?q=${query}`;
+    const cardSelectors = [
+      "article",
+      ".job-item",
+      ".job-card",
+      ".job",
+      ".job-listing",
+      ".listing-item",
+      ".media",
+      ".card",
+      ".search-results li",
+      ".jobs-list li",
+      "[data-job-id]",
+      "[data-job]",
+      "li"
+    ];
+    const titleSelectors = [
+      "h2 a",
+      "h3 a",
+      ".job-title a",
+      ".job-card__title a",
+      ".listing-title a",
+      ".media-heading a",
+      "a"
+    ];
+    const companySelectors = [
+      ".company",
+      ".job-company",
+      ".job-card__company",
+      ".listing-company",
+      ".company-name",
+      ".media-body .small"
+    ];
+    const descriptionSelectors = [
+      ".description",
+      ".job-description",
+      ".job-card__description",
+      ".listing-description",
+      ".excerpt",
+      "p"
+    ];
+    const locationSelectors = [
+      ".location",
+      ".job-location",
+      ".job-card__location",
+      ".listing-location",
+      "[class*='location']"
+    ];
 
     try {
       await gotoAndStabilize(page, "tanitjobs", url);
       await humanDelayFor("tanitjobs");
+      await page
+        .waitForSelector(cardSelectors.join(", "), { timeout: SCRAPER_SOURCE_CONFIG.tanitjobs.timeoutMs })
+        .catch(() => undefined);
 
-      const tanitEvaluator = (innerLimit: number) => {
-        const resolveUrl = (href: string): string => {
-          if (!href) return "";
-          try { return new URL(href, window.location.origin).toString(); } catch { return href; }
-        };
-        return Array.from(document.querySelectorAll("article, .job-item, .job, .media, .card, .search-results li, li"))
-          .slice(0, innerLimit)
-          .map((card) => {
-            const title = card.querySelector("h2 a, h3 a, .job-title a, .media-heading a, a")?.textContent?.trim() ?? "";
-            const company =
-              card.querySelector(".company, .job-company, .listing-company, .media-body .small")?.textContent?.trim() ?? "";
-            const description = card.querySelector(".description, .job-description, p")?.textContent?.trim() ?? "";
-            const locationText = card.querySelector(".location, .job-location, .listing-location")?.textContent?.trim() ?? "";
-            const href =
-              (card.querySelector("h2 a, h3 a, .job-title a, .media-heading a, a") as HTMLAnchorElement | null)?.getAttribute(
-                "href"
-              )?.trim() ?? "";
-            return { title, company, description, locationText, applyUrl: resolveUrl(href) };
-          })
-          .filter((job) => job.title && job.applyUrl);
-      };
+      const extractJobs = async () =>
+        page.evaluate(
+          ({
+            innerLimit,
+            cardSelectorList,
+            titleSelectorList,
+            companySelectorList,
+            descriptionSelectorList,
+            locationSelectorList
+          }: {
+            innerLimit: number;
+            cardSelectorList: string[];
+            titleSelectorList: string[];
+            companySelectorList: string[];
+            descriptionSelectorList: string[];
+            locationSelectorList: string[];
+          }) => {
+            const resolveUrl = (href: string): string => {
+              if (!href) return "";
+              try { return new URL(href, window.location.origin).toString(); } catch { return href; }
+            };
+            const cards = Array.from(document.querySelectorAll(cardSelectorList.join(", ")));
+            const titleSelector = titleSelectorList.join(", ");
+            const companySelector = companySelectorList.join(", ");
+            const descriptionSelector = descriptionSelectorList.join(", ");
+            const locationSelector = locationSelectorList.join(", ");
+            return cards
+              .slice(0, innerLimit)
+              .map((card) => {
+                const title = card.querySelector(titleSelector)?.textContent?.trim() ?? "";
+                const company = card.querySelector(companySelector)?.textContent?.trim() ?? "";
+                const description = card.querySelector(descriptionSelector)?.textContent?.trim() ?? "";
+                const locationText = card.querySelector(locationSelector)?.textContent?.trim() ?? "";
+                const link = card.querySelector(titleSelector) as HTMLAnchorElement | null;
+                const href = link?.getAttribute("href")?.trim() ?? link?.href?.trim() ?? "";
+                return { title, company, description, locationText, applyUrl: resolveUrl(href) };
+              })
+              .filter((job) => job.title && job.applyUrl);
+          },
+          {
+            innerLimit: limit,
+            cardSelectorList: cardSelectors,
+            titleSelectorList: titleSelectors,
+            companySelectorList: companySelectors,
+            descriptionSelectorList: descriptionSelectors,
+            locationSelectorList: locationSelectors
+          }
+        );
 
-      const jobs = await page.evaluate(tanitEvaluator, limit);
+      const jobs = await extractJobs();
 
       let extractedJobs = jobs as ExtractedJob[];
       if (extractedJobs.length === 0) {
         logger.warn({ source: "tanitjobs" }, "no jobs on first pass, waiting 5s before retry");
         await page.waitForTimeout(5000);
-        const retryJobs = await page.evaluate(tanitEvaluator, limit);
+        const retryJobs = await extractJobs();
         extractedJobs = retryJobs as ExtractedJob[];
       }
       if (extractedJobs.length === 0) {
@@ -591,15 +840,24 @@ class JobScraperService {
         extractedJobs = parseJobsFromHtmlFallback(html, "tanitjobs", limit, args.location);
         logger.warn({ source: "tanitjobs" }, "using html fallback parser");
       }
+      if (extractedJobs.length === 0) {
+        await this.captureDebugArtifacts(page, "tanitjobs", "empty-results");
+      }
 
-      return extractedJobs.map((job) => ({
-        title: normalize(job.title),
-        company: normalize(job.company || "Unknown company"),
-        description: getDescriptionOrDefault(job),
-        url: job.applyUrl,
-        source: "tanitjobs",
-        location: normalize(job.locationText || args.location || "Tunisie")
-      }));
+      return extractedJobs
+        .map((job) =>
+          normalizeScrapedJob(
+            {
+              ...job,
+              source: "tanitjobs"
+            },
+            args
+          )
+        )
+        .filter(isPresent);
+    } catch (error) {
+      await this.captureDebugArtifacts(page, "tanitjobs", "list-error");
+      throw error;
     } finally {
       await page.close().catch(() => undefined);
       await context.close().catch(() => undefined);

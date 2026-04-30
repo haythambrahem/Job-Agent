@@ -51,6 +51,12 @@ packages/
 
 ### Core (`packages/core`)
 - `GROQ_API_KEY`
+- `SCRAPER_HEADLESS` (set to `false` to run headed)
+- `SCRAPER_DEBUG` (set to `true` to save HTML + screenshot snapshots)
+- `SCRAPER_DEBUG_DIR` (override default snapshot directory)
+- `SCRAPER_PROXY_SERVERS` (comma-separated proxy URLs) or `SCRAPER_PROXY_SERVER`
+- `SCRAPER_PROXY_USERNAME`
+- `SCRAPER_PROXY_PASSWORD`
 
 ## Local setup
 
