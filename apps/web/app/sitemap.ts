@@ -1,7 +1,7 @@
 import type { MetadataRoute } from 'next'
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = 'https://jobagent.app'
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://jobagent.app'
 
   // Static pages
   const staticRoutes = [

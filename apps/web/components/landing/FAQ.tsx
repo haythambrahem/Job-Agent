@@ -3,41 +3,42 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+export const FAQData = [
+  {
+    question: 'How does Job Agent automate applications?',
+    answer: 'Job Agent uses AI to scan job listings that match your criteria, automatically fill out application forms with your information, and submit them on your behalf. You set your preferences once, and we handle the rest.',
+    icon: '🤖'
+  },
+  {
+    question: 'Is it really free to get started?',
+    answer: 'Yes! You get a free 14-day trial with access to all features. No credit card required to start. After the trial, you can choose a paid plan or continue with our free tier with limited applications.',
+    icon: '💰'
+  },
+  {
+    question: 'Will employers know my applications are automated?',
+    answer: 'No. Your applications look like they come directly from you. We use your actual information and follow all job board guidelines to ensure your applications appear authentic.',
+    icon: '🔒'
+  },
+  {
+    question: 'Can I customize what jobs I apply for?',
+    answer: 'Absolutely! You have complete control over your job criteria. Filter by location, salary range, industry, company size, and more. You can also manually approve or reject jobs before they\'re submitted.',
+    icon: '⚙️'
+  },
+  {
+    question: 'What if I get an interview?',
+    answer: 'We\'ll notify you immediately and help you prepare. Job Agent includes interview prep guides, company research tools, and follow-up reminders to help you succeed.',
+    icon: '🎯'
+  },
+  {
+    question: 'What integrations do you support?',
+    answer: 'We integrate with major job boards including LinkedIn, Indeed, Glassdoor, and more. We also sync with your email and calendar to keep everything in one place.',
+    icon: '🔗'
+  },
+];
+
 export default function FAQ() {
   const [openIndex, setOpenIndex] = useState<number | null>(0);
-
-  const faqs = [
-    {
-      question: 'How does Job Agent automate applications?',
-      answer: 'Job Agent uses AI to scan job listings that match your criteria, automatically fill out application forms with your information, and submit them on your behalf. You set your preferences once, and we handle the rest.',
-      icon: '🤖'
-    },
-    {
-      question: 'Is it really free to get started?',
-      answer: 'Yes! You get a free 14-day trial with access to all features. No credit card required to start. After the trial, you can choose a paid plan or continue with our free tier with limited applications.',
-      icon: '💰'
-    },
-    {
-      question: 'Will employers know my applications are automated?',
-      answer: 'No. Your applications look like they come directly from you. We use your actual information and follow all job board guidelines to ensure your applications appear authentic.',
-      icon: '🔒'
-    },
-    {
-      question: 'Can I customize what jobs I apply for?',
-      answer: 'Absolutely! You have complete control over your job criteria. Filter by location, salary range, industry, company size, and more. You can also manually approve or reject jobs before they\'re submitted.',
-      icon: '⚙️'
-    },
-    {
-      question: 'What if I get an interview?',
-      answer: 'We\'ll notify you immediately and help you prepare. Job Agent includes interview prep guides, company research tools, and follow-up reminders to help you succeed.',
-      icon: '🎯'
-    },
-    {
-      question: 'What integrations do you support?',
-      answer: 'We integrate with major job boards including LinkedIn, Indeed, Glassdoor, and more. We also sync with your email and calendar to keep everything in one place.',
-      icon: '🔗'
-    },
-  ];
+  const faqs = FAQData;
 
   const containerVariants = {
     hidden: { opacity: 0 },

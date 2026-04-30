@@ -1,28 +1,45 @@
 import { Metadata } from "next";
 import { JsonLdScript } from "@/components/JsonLdScript";
-import { generateSoftwareApplicationSchema, generateOrganizationSchema } from "@/lib/schema";
+import { generateSoftwareApplicationSchema, generateOrganizationSchema, generateFAQSchema } from "@/lib/schema";
+import { SITE_CONFIG } from "@/lib/constants";
 import LandingPage from "@/components/landing/LandingPage";
 
 export const metadata: Metadata = {
-  title: "Job Agent | Automate Your Job Applications & Find Jobs Faster",
-  description: "Automate job applications, match with opportunities, and land your dream job faster. Job Agent uses AI to streamline your job search process.",
-  keywords: ["job automation", "job search", "automated job applications", "job matching", "AI job search"],
+  title: `${SITE_CONFIG.name} | Automate Your Job Applications & Find Jobs Faster`,
+  description: SITE_CONFIG.description,
+  keywords: SITE_CONFIG.keywords,
   openGraph: {
-    title: "Job Agent | Automate Your Job Applications",
+    title: `${SITE_CONFIG.name} | Automate Your Job Applications`,
     description: "Automate job applications and find jobs faster with AI-powered matching.",
     type: "website",
-    url: "https://jobagent.app",
+    url: SITE_CONFIG.url,
+    siteName: SITE_CONFIG.name,
+    images: [
+      {
+        url: SITE_CONFIG.ogImage,
+        width: 1200,
+        height: 630,
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `${SITE_CONFIG.name} | Automate Your Job Applications`,
+    description: "Automate job applications and find jobs faster with AI-powered matching.",
+    creator: SITE_CONFIG.social.twitter,
   },
 };
 
 export default function HomePage() {
   const softwareSchema = generateSoftwareApplicationSchema();
   const organizationSchema = generateOrganizationSchema();
+  const faqSchema = generateFAQSchema();
 
   return (
     <>
       <JsonLdScript schema={softwareSchema} />
       <JsonLdScript schema={organizationSchema} />
+      <JsonLdScript schema={faqSchema} />
       <LandingPage />
     </>
   );

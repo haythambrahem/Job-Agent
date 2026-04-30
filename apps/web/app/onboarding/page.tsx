@@ -11,8 +11,8 @@ export default function OnboardingPage() {
     experience: '',
     targetSalary: '',
     location: '',
-    skills: [],
-    preferredJobTypes: [],
+    skills: [] as string[],
+    preferredJobTypes: [] as string[],
     companies: '',
     industries: '',
   });
