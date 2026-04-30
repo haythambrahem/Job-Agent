@@ -57,7 +57,7 @@ export default function FAQ() {
   };
 
   return (
-    <section className="py-24 px-4 sm:px-6 lg:px-8">
+    <section id="faq" className="py-24 px-4">
       <div className="max-w-4xl mx-auto">
         {/* Header */}
         <motion.div
@@ -66,42 +66,39 @@ export default function FAQ() {
           viewport={{ once: true }}
           className="text-center mb-16"
         >
-          <h2 className="text-4xl md:text-5xl font-bold text-white mb-4 text-balance">
-            Questions? We Have <span className="gradient-text">Answers</span>
+          <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">
+            Questions? We Have Answers
           </h2>
-          <p className="text-xl text-slate-300 text-balance max-w-2xl mx-auto">
-            Learn everything about Job Agent and how it can transform your job search
+          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+            Everything you need to know about Job Agent
           </p>
         </motion.div>
 
         {/* FAQ List */}
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true }}
-          className="space-y-4"
-        >
+        <div className="space-y-4">
           {faqs.map((faq, index) => (
             <motion.div
               key={index}
-              variants={itemVariants}
-              className="glass rounded-xl overflow-hidden group hover:border-blue-400/30 transition-all duration-300"
+              initial={{ opacity: 0, y: 10 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: index * 0.05 }}
+              viewport={{ once: true }}
+              className="card overflow-hidden"
             >
               <button
                 onClick={() => setOpenIndex(openIndex === index ? null : index)}
-                className="w-full px-6 py-5 flex items-center justify-between hover:bg-white/5 transition"
+                className="w-full px-6 py-5 flex items-center justify-between hover:bg-gray-50 transition"
               >
                 <div className="flex items-center gap-4 text-left flex-1">
                   <span className="text-2xl flex-shrink-0">{faq.icon}</span>
-                  <h3 className="text-lg font-semibold text-white group-hover:text-transparent group-hover:bg-clip-text group-hover:bg-gradient-to-r group-hover:from-blue-400 group-hover:to-purple-400 transition">
+                  <h3 className="text-lg font-semibold text-gray-900">
                     {faq.question}
                   </h3>
                 </div>
                 <motion.span
                   animate={{ rotate: openIndex === index ? 180 : 0 }}
                   transition={{ duration: 0.3 }}
-                  className="text-2xl text-blue-400 flex-shrink-0 ml-4"
+                  className="text-2xl text-blue-600 flex-shrink-0 ml-4"
                 >
                   ⌄
                 </motion.span>
@@ -116,8 +113,8 @@ export default function FAQ() {
                     transition={{ duration: 0.3 }}
                     className="overflow-hidden"
                   >
-                    <div className="px-6 py-5 bg-white/5 border-t border-white/10">
-                      <p className="text-slate-300 leading-relaxed text-lg">
+                    <div className="px-6 py-5 bg-gray-50 border-t border-gray-200">
+                      <p className="text-gray-600 leading-relaxed">
                         {faq.answer}
                       </p>
                     </div>
@@ -126,7 +123,7 @@ export default function FAQ() {
               </AnimatePresence>
             </motion.div>
           ))}
-        </motion.div>
+        </div>
 
         {/* CTA */}
         <motion.div
@@ -136,10 +133,10 @@ export default function FAQ() {
           transition={{ delay: 0.3 }}
           className="mt-16 text-center"
         >
-          <p className="text-slate-300 mb-6">Still have questions?</p>
+          <p className="text-gray-600 mb-6">Still have questions?</p>
           <a
             href="mailto:support@jobagent.app"
-            className="inline-block px-8 py-4 glass hover:bg-white/10 text-white font-semibold rounded-xl transition"
+            className="inline-block px-8 py-4 bg-gray-100 hover:bg-gray-200 text-gray-900 font-semibold rounded-lg transition"
           >
             Contact our support team
           </a>

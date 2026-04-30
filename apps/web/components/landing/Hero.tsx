@@ -11,7 +11,7 @@ export default function Hero() {
     hidden: { opacity: 0 },
     visible: {
       opacity: 1,
-      transition: { staggerChildren: 0.2, delayChildren: 0.3 }
+      transition: { staggerChildren: 0.15, delayChildren: 0.2 }
     }
   };
 
@@ -20,23 +20,23 @@ export default function Hero() {
     visible: {
       opacity: 1,
       y: 0,
-      transition: { duration: 0.8 }
+      transition: { duration: 0.7 }
     }
   };
 
   return (
-    <section className="relative min-h-screen flex items-center justify-center px-4 py-24">
+    <section className="relative pt-32 pb-24 px-4">
       <motion.div 
-        className="max-w-5xl mx-auto space-y-10 text-center w-full"
+        className="max-w-5xl mx-auto space-y-8 text-center w-full"
         variants={containerVariants}
         initial="hidden"
         animate="visible"
       >
         {/* Badge */}
         <motion.div variants={itemVariants}>
-          <div className="inline-block px-4 py-2 glass">
-            <span className="text-sm font-semibold bg-gradient-to-r from-blue-400 via-purple-400 to-cyan-400 -webkit-background-clip-text -webkit-text-fill-color-transparent bg-clip-text">
-              ✨ AI-Powered Job Automation
+          <div className="inline-block px-4 py-2 bg-blue-50 border border-blue-200 rounded-full">
+            <span className="text-sm font-semibold text-blue-600">
+              ✨ AI-Powered Automation
             </span>
           </div>
         </motion.div>
@@ -44,20 +44,17 @@ export default function Hero() {
         {/* Main Headline */}
         <motion.h1 
           variants={itemVariants}
-          className="text-6xl md:text-7xl lg:text-8xl font-bold text-white leading-[1.1] tracking-tight"
+          className="text-5xl md:text-6xl lg:text-7xl font-bold text-gray-900 leading-tight"
         >
-          Automate Your <br />
-          <span className="bg-gradient-to-r from-blue-400 via-purple-400 to-cyan-400 -webkit-background-clip-text -webkit-text-fill-color-transparent bg-clip-text">
-            Job Hunt
-          </span>
+          Automate Your Job Hunt, Land More Interviews
         </motion.h1>
 
         {/* Subheading */}
         <motion.p 
           variants={itemVariants}
-          className="text-xl md:text-2xl text-slate-300 max-w-3xl mx-auto leading-relaxed"
+          className="text-xl md:text-2xl text-gray-600 max-w-3xl mx-auto leading-relaxed"
         >
-          Stop wasting hours on applications. Job Agent uses AI to find opportunities, apply instantly, and land more interviews.
+          Stop wasting hours on repetitive applications. Job Agent uses AI to find matching opportunities, apply automatically, and track every step.
         </motion.p>
 
         {/* CTA Buttons */}
@@ -67,7 +64,7 @@ export default function Hero() {
         >
           <Link
             href="/signup"
-            className="group relative px-8 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold rounded-xl overflow-hidden transition-all duration-300 hover:shadow-2xl hover:shadow-blue-500/50"
+            className="group relative px-8 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold rounded-lg overflow-hidden transition-all duration-300 hover:shadow-lg"
             onMouseEnter={() => setIsHovering(true)}
             onMouseLeave={() => setIsHovering(false)}
           >
@@ -80,46 +77,45 @@ export default function Hero() {
                 →
               </motion.span>
             </span>
-            <div className="absolute inset-0 bg-gradient-to-r from-purple-600 to-blue-600 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
           </Link>
 
           <Link
             href="#how-it-works"
-            className="px-8 py-4 glass hover:bg-white/10 text-white font-bold rounded-xl transition-all duration-300 hover:border-blue-400/50"
+            className="px-8 py-4 border-2 border-gray-300 text-gray-900 font-bold rounded-lg hover:border-blue-600 hover:text-blue-600 transition-all duration-300"
           >
-            See How It Works
+            Watch Demo
           </Link>
         </motion.div>
 
         {/* Trust info */}
         <motion.p 
           variants={itemVariants}
-          className="text-sm text-slate-400"
+          className="text-sm text-gray-600"
         >
-          ✓ No credit card required · ✓ Free for 14 days · ✓ Cancel anytime
+          No credit card required · Free for 14 days · Cancel anytime
         </motion.p>
 
         {/* Trust Badges */}
         <motion.div 
           variants={itemVariants}
-          className="pt-8 border-t border-white/10"
+          className="pt-8 border-t border-gray-200"
         >
-          <p className="text-slate-400 text-sm mb-8">Trusted by ambitious job seekers worldwide</p>
+          <p className="text-gray-600 text-sm mb-8">Trusted by 10,000+ job seekers worldwide</p>
           <div className="grid grid-cols-3 gap-8 md:gap-12">
             {[
-              { value: '50K+', label: 'Jobs Automated' },
-              { value: '95%', label: 'Success Rate' },
-              { value: '10hrs', label: 'Saved Weekly' }
+              { value: '10K+', label: 'Active Users' },
+              { value: '98%', label: 'Success Rate' },
+              { value: '4.9★', label: 'Rating' }
             ].map((stat, idx) => (
               <motion.div
                 key={idx}
                 whileHover={{ scale: 1.05 }}
                 className="space-y-2"
               >
-                <p className="text-3xl md:text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">
+                <p className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
                   {stat.value}
                 </p>
-                <p className="text-slate-400 text-sm">{stat.label}</p>
+                <p className="text-gray-600 text-sm">{stat.label}</p>
               </motion.div>
             ))}
           </div>
@@ -128,12 +124,12 @@ export default function Hero() {
 
       {/* Floating elements */}
       <motion.div 
-        className="absolute top-20 right-10 w-64 h-64 bg-gradient-to-br from-blue-600/10 to-purple-600/10 rounded-full blur-3xl"
+        className="absolute top-20 right-10 w-64 h-64 bg-blue-100 rounded-full blur-3xl opacity-20"
         animate={{ y: [0, 30, 0] }}
         transition={{ duration: 4, repeat: Infinity }}
       />
       <motion.div 
-        className="absolute bottom-20 left-10 w-64 h-64 bg-gradient-to-br from-cyan-600/10 to-blue-600/10 rounded-full blur-3xl"
+        className="absolute bottom-20 left-10 w-64 h-64 bg-indigo-100 rounded-full blur-3xl opacity-20"
         animate={{ y: [0, -30, 0] }}
         transition={{ duration: 4, repeat: Infinity, delay: 2 }}
       />
