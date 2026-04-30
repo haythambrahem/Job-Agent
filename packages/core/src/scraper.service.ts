@@ -117,6 +117,10 @@ const PROXY_SERVERS = (process.env.SCRAPER_PROXY_SERVERS || process.env.SCRAPER_
   .map((entry) => entry.trim())
   .filter(Boolean);
 
+const DEFAULT_COMPANY = "Unknown company";
+const DEFAULT_LOCATION = "Unknown";
+const DEFAULT_TUNISIA_LOCATION = "Tunisie";
+
 function nowMs(): number {
   return Date.now();
 }
@@ -195,10 +199,9 @@ function pickRandom<T>(values: readonly T[]): T {
 
 function normalizeScrapedJob(job: NormalizedJobInput, args: ScrapeJobsInput): ScrapedJob | null {
   const title = normalize(job.title);
-  const companyFallback = job.source === "tanitjobs" ? "Unknown company" : "Unknown";
-  const company = normalize(job.company || companyFallback);
+  const company = normalize(job.company || DEFAULT_COMPANY);
   const description = normalize(getDescriptionOrDefault(job));
-  const locationFallback = job.source === "tanitjobs" ? "Tunisie" : "Unknown";
+  const locationFallback = job.source === "tanitjobs" ? DEFAULT_TUNISIA_LOCATION : DEFAULT_LOCATION;
   const location = normalize(job.locationText || args.location || locationFallback);
   const url = normalizeUrl(job.applyUrl, job.source);
   if (!title || !company || !description || !location || !isValidHttpUrl(url)) {
@@ -236,9 +239,9 @@ function parseJobsFromHtmlFallback(html: string, source: JobSource, limit: numbe
     const windowEnd = Math.min(html.length, (match.index ?? 0) + 700);
     jobs.push({
       title,
-      company: source === "tanitjobs" ? "Unknown company" : "Unknown",
+      company: DEFAULT_COMPANY,
       description: stripTags(html.slice(windowStart, windowEnd)),
-      locationText: location ?? "Unknown",
+      locationText: location ?? DEFAULT_LOCATION,
       applyUrl: normalizeUrl(href, source)
     });
   }
@@ -482,10 +485,10 @@ class JobScraperService {
 
   private async withRetry<T>(source: JobSource, metrics: SourceScrapeMetrics, run: () => Promise<T>): Promise<T> {
     const config = SCRAPER_SOURCE_CONFIG[source];
+    metrics.requests += 1;
     let attempt = 0;
 
     while (attempt <= config.maxRetries) {
-      metrics.requests += 1;
       const startedAtMs = nowMs();
       try {
         const result = await run();
@@ -719,54 +722,108 @@ class JobScraperService {
     const limit = args.limitPerSource ?? 10;
     const query = encodeURIComponent(args.keywords);
     const url = `https://www.tanitjobs.com/jobs/?q=${query}`;
+    const cardSelectors = [
+      "article",
+      ".job-item",
+      ".job-card",
+      ".job",
+      ".job-listing",
+      ".listing-item",
+      ".media",
+      ".card",
+      ".search-results li",
+      ".jobs-list li",
+      "[data-job-id]",
+      "[data-job]",
+      "li"
+    ];
+    const titleSelectors = [
+      "h2 a",
+      "h3 a",
+      ".job-title a",
+      ".job-card__title a",
+      ".listing-title a",
+      ".media-heading a",
+      "a"
+    ];
+    const companySelectors = [
+      ".company",
+      ".job-company",
+      ".job-card__company",
+      ".listing-company",
+      ".company-name",
+      ".media-body .small"
+    ];
+    const descriptionSelectors = [
+      ".description",
+      ".job-description",
+      ".job-card__description",
+      ".listing-description",
+      ".excerpt",
+      "p"
+    ];
+    const locationSelectors = [
+      ".location",
+      ".job-location",
+      ".job-card__location",
+      ".listing-location",
+      "[class*='location']"
+    ];
 
     try {
       await gotoAndStabilize(page, "tanitjobs", url);
       await humanDelayFor("tanitjobs");
       await page
-        .waitForSelector(
-          "article, .job-item, .job-card, .job, .job-listing, .listing-item, .search-results li, [data-job-id], [data-job]",
-          { timeout: SCRAPER_SOURCE_CONFIG.tanitjobs.timeoutMs }
-        )
+        .waitForSelector(cardSelectors.join(", "), { timeout: SCRAPER_SOURCE_CONFIG.tanitjobs.timeoutMs })
         .catch(() => undefined);
 
       const extractJobs = async () =>
         page.evaluate(
-          (innerLimit: number) => {
+          ({
+            innerLimit,
+            cardSelectorList,
+            titleSelectorList,
+            companySelectorList,
+            descriptionSelectorList,
+            locationSelectorList
+          }: {
+            innerLimit: number;
+            cardSelectorList: string[];
+            titleSelectorList: string[];
+            companySelectorList: string[];
+            descriptionSelectorList: string[];
+            locationSelectorList: string[];
+          }) => {
             const resolveUrl = (href: string): string => {
               if (!href) return "";
               try { return new URL(href, window.location.origin).toString(); } catch { return href; }
             };
-            const selectors =
-              "article, .job-item, .job-card, .job, .job-listing, .listing-item, .media, .card, .search-results li, .jobs-list li, [data-job-id], [data-job], li";
-            return Array.from(document.querySelectorAll(selectors))
+            const cards = Array.from(document.querySelectorAll(cardSelectorList.join(", ")));
+            const titleSelector = titleSelectorList.join(", ");
+            const companySelector = companySelectorList.join(", ");
+            const descriptionSelector = descriptionSelectorList.join(", ");
+            const locationSelector = locationSelectorList.join(", ");
+            return cards
               .slice(0, innerLimit)
               .map((card) => {
-                const title =
-                  card.querySelector(
-                    "h2 a, h3 a, .job-title a, .job-card__title a, .listing-title a, .media-heading a, a"
-                  )?.textContent?.trim() ?? "";
-                const company =
-                  card.querySelector(
-                    ".company, .job-company, .job-card__company, .listing-company, .company-name, .media-body .small"
-                  )?.textContent?.trim() ?? "";
-                const description =
-                  card.querySelector(
-                    ".description, .job-description, .job-card__description, .listing-description, .excerpt, p"
-                  )?.textContent?.trim() ?? "";
-                const locationText =
-                  card.querySelector(
-                    ".location, .job-location, .job-card__location, .listing-location, [class*='location']"
-                  )?.textContent?.trim() ?? "";
-                const link = card.querySelector(
-                  "h2 a, h3 a, .job-title a, .job-card__title a, .listing-title a, .media-heading a, a"
-                ) as HTMLAnchorElement | null;
+                const title = card.querySelector(titleSelector)?.textContent?.trim() ?? "";
+                const company = card.querySelector(companySelector)?.textContent?.trim() ?? "";
+                const description = card.querySelector(descriptionSelector)?.textContent?.trim() ?? "";
+                const locationText = card.querySelector(locationSelector)?.textContent?.trim() ?? "";
+                const link = card.querySelector(titleSelector) as HTMLAnchorElement | null;
                 const href = link?.getAttribute("href")?.trim() ?? link?.href?.trim() ?? "";
                 return { title, company, description, locationText, applyUrl: resolveUrl(href) };
               })
               .filter((job) => job.title && job.applyUrl);
           },
-          limit
+          {
+            innerLimit: limit,
+            cardSelectorList: cardSelectors,
+            titleSelectorList: titleSelectors,
+            companySelectorList: companySelectors,
+            descriptionSelectorList: descriptionSelectors,
+            locationSelectorList: locationSelectors
+          }
         );
 
       const jobs = await extractJobs();
