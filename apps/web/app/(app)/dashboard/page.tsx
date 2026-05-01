@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import Card from "@/components/Card";
 import { authOptions } from "@/lib/auth";
 import Card from "@/components/Card";
 
@@ -13,10 +14,10 @@ export default async function DashboardPage() {
 
   // Mock data - replace with actual database queries
   const stats = [
-    { label: "Applications Today", value: "12", trend: "+3 from yesterday", icon: "📧" },
-    { label: "Total Applications", value: "156", trend: "+24 this month", icon: "📋" },
-    { label: "Positive Responses", value: "34", trend: "21.8% rate", icon: "✅" },
-    { label: "Success Rate", value: "98%", trend: "↑ +2% this week", icon: "🎯" }
+    { label: "Applications Today", value: "12", trend: "+3 from yesterday", icon: "📧", color: "blue" },
+    { label: "Total Applications", value: "156", trend: "+24 this month", icon: "📋", color: "indigo" },
+    { label: "Positive Responses", value: "34", trend: "21.8% rate", icon: "✅", color: "green" },
+    { label: "Success Rate", value: "98%", trend: "↑ +2% this week", icon: "🎯", color: "purple" }
   ];
 
   const recentActivities = [
