@@ -19,6 +19,18 @@ export default async function DashboardPage() {
     { label: "Success Rate", value: "98%", trend: "↑ +2% this week", icon: "🎯" }
   ];
 
+  const activityItems = [
+    { job: "Senior React Developer", company: "Tech Corp", status: "Interview Scheduled", date: "2 hours ago" },
+    { job: "Full Stack Engineer", company: "StartUp Inc", status: "Application Sent", date: "1 day ago" },
+    { job: "Frontend Developer", company: "Design Studio", status: "Pending Response", date: "3 days ago" }
+  ];
+
+  const quickActions = [
+    { href: "/jobs", icon: "💼", title: "Browse Jobs", description: "Find new opportunities" },
+    { href: "/applications", icon: "📊", title: "Applications", description: "Track your pipeline" },
+    { href: "/profile", icon: "⚙️", title: "Profile Settings", description: "Update automation rules" }
+  ];
+
   return (
     <div className="flex flex-col gap-8">
       <section className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -71,13 +83,9 @@ export default async function DashboardPage() {
             </Link>
           </div>
           <div className="mt-6 divide-y divide-gray-100">
-            {[
-              { job: "Senior React Developer", company: "Tech Corp", status: "Interview Scheduled", date: "2 hours ago" },
-              { job: "Full Stack Engineer", company: "StartUp Inc", status: "Application Sent", date: "1 day ago" },
-              { job: "Frontend Developer", company: "Design Studio", status: "Pending Response", date: "3 days ago" }
-            ].map((item, idx) => (
+            {activityItems.map((item) => (
               <div
-                key={idx}
+                key={`${item.job}-${item.company}`}
                 className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div>
@@ -98,11 +106,7 @@ export default async function DashboardPage() {
         <Card>
           <h2 className="text-xl font-semibold text-gray-900">Quick Actions</h2>
           <div className="mt-6 space-y-3">
-            {[
-              { href: "/jobs", icon: "💼", title: "Browse Jobs", description: "Find new opportunities" },
-              { href: "/applications", icon: "📊", title: "Applications", description: "Track your pipeline" },
-              { href: "/profile", icon: "⚙️", title: "Profile Settings", description: "Update automation rules" }
-            ].map((link) => (
+            {quickActions.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
