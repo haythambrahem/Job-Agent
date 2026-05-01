@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { authOptions } from "@/lib/auth";
-import Card from "@/components/ui/Card";
+import Card from "@/components/Card";
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);

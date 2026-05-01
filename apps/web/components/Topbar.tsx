@@ -25,13 +25,19 @@ export default function Topbar({ email }: { email?: string }) {
         {/* Right Actions */}
         <div className="flex items-center gap-4">
           {/* Notifications */}
-          <button className="relative p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors duration-200">
+          <button
+            className="relative p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors duration-200"
+            aria-label="Notifications"
+          >
             <span className="text-xl">🔔</span>
             <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
           </button>
 
           {/* Upgrade Button */}
-          <button className="px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50 rounded-lg transition-colors duration-200">
+          <button
+            className="px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50 rounded-lg transition-colors duration-200"
+            aria-label="Upgrade to premium plan"
+          >
             ⭐ Upgrade
           </button>
 
