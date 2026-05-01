@@ -15,6 +15,9 @@ const NAV_ITEMS = [
   { icon: "📚", label: "Documentation", href: "/docs" }
 ];
 
+const isNavItemActive = (pathname: string, itemHref: string) =>
+  pathname === itemHref || (itemHref !== DASHBOARD_PATH && pathname.startsWith(`${itemHref}/`));
+
 export default function Sidebar({
   email,
   plan
@@ -53,9 +56,7 @@ export default function Sidebar({
 
         <nav className="flex-1 px-4 py-4 space-y-2">
           {NAV_ITEMS.map((item) => {
-            const active =
-              pathname === item.href ||
-              (item.href !== DASHBOARD_PATH && pathname.startsWith(`${item.href}/`));
+            const active = isNavItemActive(pathname, item.href);
             return (
               <Link
                 key={item.href}
