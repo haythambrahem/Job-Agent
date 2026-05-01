@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { authOptions } from "@/lib/auth";
+import Card from "@/components/ui/Card";
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
@@ -19,83 +20,106 @@ export default async function DashboardPage() {
   ];
 
   return (
-    <div className="space-y-8">
-      {/* Welcome Section */}
-      <div>
-        <h1 className="text-4xl font-bold text-gray-900">Welcome back, {session.user.email?.split("@")[0]}!</h1>
-        <p className="mt-2 text-lg text-gray-600">You have 12 applications pending response</p>
-      </div>
+    <div className="flex flex-col gap-8">
+      <section className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-3xl font-semibold text-gray-900">
+            Welcome back, {session.user.email?.split("@")[0]}!
+          </h1>
+          <p className="mt-2 text-sm text-gray-600">You have 12 applications pending response.</p>
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Link
+            href="/jobs"
+            className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors duration-200 hover:bg-blue-700"
+          >
+            Find Jobs
+          </Link>
+          <Link
+            href="/applications"
+            className="inline-flex items-center justify-center rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors duration-200 hover:bg-gray-50"
+          >
+            View Applications
+          </Link>
+        </div>
+      </section>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <section className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map((stat) => (
-          <div key={stat.label} className="card">
+          <Card key={stat.label} className="flex flex-col gap-4">
             <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">{stat.label}</p>
-                <p className="mt-3 text-3xl font-bold text-gray-900">{stat.value}</p>
-                <p className="mt-2 text-sm text-gray-500">{stat.trend}</p>
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-lg text-blue-600">
+                {stat.icon}
               </div>
-              <span className="text-3xl">{stat.icon}</span>
+              <span className="text-xs font-medium text-gray-500">This week</span>
             </div>
-          </div>
+            <div>
+              <p className="text-sm font-medium text-gray-500">{stat.label}</p>
+              <p className="mt-2 text-2xl font-semibold text-gray-900">{stat.value}</p>
+              <p className="mt-1 text-sm text-gray-500">{stat.trend}</p>
+            </div>
+          </Card>
         ))}
-      </div>
+      </section>
 
-      {/* Quick Actions */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 card">
-          <h2 className="text-lg font-bold text-gray-900 mb-4">Recent Activity</h2>
-          <div className="space-y-4">
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <Card className="xl:col-span-2">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl font-semibold text-gray-900">Recent Activity</h2>
+            <Link href="/applications" className="text-sm font-medium text-blue-600 hover:text-blue-700">
+              View all
+            </Link>
+          </div>
+          <div className="mt-6 divide-y divide-gray-100">
             {[
               { job: "Senior React Developer", company: "Tech Corp", status: "Interview Scheduled", date: "2 hours ago" },
               { job: "Full Stack Engineer", company: "StartUp Inc", status: "Application Sent", date: "1 day ago" },
               { job: "Frontend Developer", company: "Design Studio", status: "Pending Response", date: "3 days ago" }
             ].map((item, idx) => (
-              <div key={idx} className="flex items-center justify-between pb-4 border-b border-gray-100 last:border-0">
+              <div
+                key={idx}
+                className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between"
+              >
                 <div>
-                  <p className="font-medium text-gray-900">{item.job}</p>
+                  <p className="text-sm font-semibold text-gray-900">{item.job}</p>
                   <p className="text-sm text-gray-500">{item.company}</p>
                 </div>
-                <div className="text-right">
-                  <span className="inline-block px-3 py-1 text-xs font-semibold bg-blue-100 text-blue-700 rounded-full">
+                <div className="flex items-center gap-3 sm:flex-col sm:items-end">
+                  <span className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
                     {item.status}
                   </span>
-                  <p className="text-xs text-gray-500 mt-2">{item.date}</p>
+                  <p className="text-xs text-gray-500">{item.date}</p>
                 </div>
               </div>
             ))}
           </div>
-        </div>
+        </Card>
 
-        {/* Quick Links */}
-        <div className="space-y-3">
-          <Link
-            href="/jobs"
-            className="block card text-center hover:border-blue-500 transition-colors duration-200"
-          >
-            <p className="text-3xl mb-2">💼</p>
-            <p className="font-semibold text-gray-900">Browse Jobs</p>
-            <p className="text-sm text-gray-500">Find new opportunities</p>
-          </Link>
-          <Link
-            href="/applications"
-            className="block card text-center hover:border-blue-500 transition-colors duration-200"
-          >
-            <p className="text-3xl mb-2">📊</p>
-            <p className="font-semibold text-gray-900">View Applications</p>
-            <p className="text-sm text-gray-500">Track all your apps</p>
-          </Link>
-          <Link
-            href="/profile"
-            className="block card text-center hover:border-blue-500 transition-colors duration-200"
-          >
-            <p className="text-3xl mb-2">⚙️</p>
-            <p className="font-semibold text-gray-900">Update Profile</p>
-            <p className="text-sm text-gray-500">Automation rules</p>
-          </Link>
-        </div>
-      </div>
+        <Card>
+          <h2 className="text-xl font-semibold text-gray-900">Quick Actions</h2>
+          <div className="mt-6 space-y-3">
+            {[
+              { href: "/jobs", icon: "💼", title: "Browse Jobs", description: "Find new opportunities" },
+              { href: "/applications", icon: "📊", title: "Applications", description: "Track your pipeline" },
+              { href: "/profile", icon: "⚙️", title: "Profile Settings", description: "Update automation rules" }
+            ].map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="flex items-center gap-4 rounded-lg border border-gray-200 px-4 py-4 text-left transition-colors duration-200 hover:border-blue-200 hover:bg-blue-50"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-lg">
+                  {link.icon}
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{link.title}</p>
+                  <p className="text-sm text-gray-500">{link.description}</p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </Card>
+      </section>
     </div>
   );
 }
