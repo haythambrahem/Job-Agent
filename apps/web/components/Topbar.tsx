@@ -13,7 +13,7 @@ export default function Topbar({ email }: { email?: string }) {
           <div className="relative">
             <input
               type="text"
-              placeholder="Search jobs by title, company, location..."
+              placeholder="Search jobs by title or company..."
               className="w-full px-4 py-2 text-sm border border-gray-300 rounded-lg bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               onFocus={() => setSearchOpen(true)}
               onBlur={() => setSearchOpen(false)}

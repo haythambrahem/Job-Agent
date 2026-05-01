@@ -20,9 +20,9 @@ export default async function DashboardPage() {
   ];
 
   const recentActivities = [
-    { job: "Senior React Developer", company: "Tech Corp", status: "Interview Scheduled", date: "2 hours ago" },
-    { job: "Full Stack Engineer", company: "StartUp Inc", status: "Application Sent", date: "1 day ago" },
-    { job: "Frontend Developer", company: "Design Studio", status: "Pending Response", date: "3 days ago" }
+    { id: "react-dev-tech-corp", job: "Senior React Developer", company: "Tech Corp", status: "Interview Scheduled", date: "2 hours ago" },
+    { id: "fullstack-startup-inc", job: "Full Stack Engineer", company: "StartUp Inc", status: "Application Sent", date: "1 day ago" },
+    { id: "frontend-design-studio", job: "Frontend Developer", company: "Design Studio", status: "Pending Response", date: "3 days ago" }
   ];
 
   const quickLinks = [
@@ -85,7 +85,7 @@ export default async function DashboardPage() {
           <div className="mt-6 divide-y divide-gray-100">
             {recentActivities.map((item) => (
               <div
-                key={`${item.job}-${item.company}`}
+                key={item.id}
                 className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div>

@@ -16,7 +16,7 @@ const NAV_ITEMS = [
 ];
 
 const isNavItemActive = (pathname: string, itemHref: string) =>
-  pathname === itemHref || (itemHref !== DASHBOARD_PATH && pathname.startsWith(`${itemHref}/`));
+  pathname === itemHref || pathname.startsWith(`${itemHref}/`);
 
 export default function Sidebar({
   email,
