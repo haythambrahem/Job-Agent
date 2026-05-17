@@ -1,97 +1,103 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useRef, useState, type FormEvent } from "react";
 import { useSession } from "next-auth/react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
 import Alert from "@/components/ui/Alert";
 import Badge from "@/components/ui/Badge";
-import GmailConnect from "./GmailConnect";
+import { apiFetch } from "@/hooks/apiClient";
+import { useProfile } from "@/hooks/useProfile";
+import type { Profile } from "@/hooks/types";
 
-interface Profile {
-  id: string;
-  name: string | null;
-  email: string;
-  image: string | null;
-  phone: string | null;
-  location: string | null;
-  plan: string;
-  subscriptionStatus: string;
-  cvPath: string | null;
-  cvOriginalName: string | null;
-  cvUploadedAt: string | null;
-}
+const GmailConnect = dynamic(() => import("./GmailConnect"), {
+  ssr: false,
+  loading: () => <div>Loading Gmail integration...</div>
+});
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
 
 export default function ProfileClient({
   initialProfile,
-  apiToken,
+  apiToken
 }: {
   initialProfile: Profile;
   apiToken: string;
 }) {
   const { update: updateSession } = useSession();
-  const [profile, setProfile] = useState<Profile>(initialProfile);
-  const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const queryClient = useQueryClient();
   const [alert, setAlert] = useState<{ msg: string; type: "success" | "error" } | null>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const cvInputRef = useRef<HTMLInputElement>(null);
+
+  const profileQuery = useProfile(apiToken, initialProfile.id, { initialData: initialProfile });
+  const profile = profileQuery.data;
 
   const showAlert = (msg: string, type: "success" | "error" = "success") => {
     setAlert({ msg, type });
     setTimeout(() => setAlert(null), 4000);
   };
 
-  const apiCall = async (path: string, options: RequestInit) => {
-    return fetch(`${API_BASE_URL}${path}`, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        ...(options.headers ?? {}),
-      },
-    });
-  };
+  const updateProfileMutation = useMutation({
+    mutationFn: async (payload: { name: string; phone: string; location: string }) =>
+      apiFetch<Pick<Profile, "name" | "phone" | "location">>("/profile", apiToken, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      })
+  });
+
+  const avatarMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append("avatar", file);
+      return apiFetch<{ image: string }>("/profile/avatar", apiToken, { method: "POST", body: form });
+    }
+  });
+
+  const cvMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append("cv", file);
+      return apiFetch<Pick<Profile, "cvPath" | "cvOriginalName" | "cvUploadedAt">>("/profile/cv", apiToken, {
+        method: "POST",
+        body: form
+      });
+    }
+  });
 
   const savePersonalInfo = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setSaving(true);
     const form = new FormData(e.currentTarget);
     const body = {
       name: String(form.get("name") ?? ""),
       phone: String(form.get("phone") ?? ""),
-      location: String(form.get("location") ?? ""),
+      location: String(form.get("location") ?? "")
     };
-    const res = await apiCall("/profile", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    setSaving(false);
-    if (res.ok) {
-      const data = (await res.json()) as Pick<Profile, "name" | "phone" | "location">;
-      setProfile((p) => ({ ...p, ...data }));
+
+    try {
+      const data = await updateProfileMutation.mutateAsync(body);
+      queryClient.setQueryData<Profile>(["profile", initialProfile.id], (current) =>
+        current ? { ...current, ...data } : current
+      );
       await updateSession({ name: data.name ?? undefined });
       showAlert("Profile updated successfully");
-    } else {
+    } catch {
       showAlert("Failed to save changes", "error");
     }
   };
 
   const uploadAvatar = async (file: File) => {
-    setUploading(true);
-    const form = new FormData();
-    form.append("avatar", file);
-    const res = await apiCall("/profile/avatar", { method: "POST", body: form });
-    setUploading(false);
-    if (res.ok) {
-      const { image } = (await res.json()) as { image: string };
-      setProfile((p) => ({ ...p, image }));
+    try {
+      const { image } = await avatarMutation.mutateAsync(file);
+      queryClient.setQueryData<Profile>(["profile", initialProfile.id], (current) =>
+        current ? { ...current, image } : current
+      );
       await updateSession({ image });
       showAlert("Profile photo updated");
-    } else {
+    } catch {
       showAlert("Photo upload failed", "error");
     }
   };
@@ -101,19 +107,24 @@ export default function ProfileClient({
       showAlert("Only PDF files are accepted", "error");
       return;
     }
-    setUploading(true);
-    const form = new FormData();
-    form.append("cv", file);
-    const res = await apiCall("/profile/cv", { method: "POST", body: form });
-    setUploading(false);
-    if (res.ok) {
-      const data = (await res.json()) as Pick<Profile, "cvPath" | "cvOriginalName" | "cvUploadedAt">;
-      setProfile((p) => ({ ...p, ...data }));
+
+    try {
+      const data = await cvMutation.mutateAsync(file);
+      queryClient.setQueryData<Profile>(["profile", initialProfile.id], (current) =>
+        current ? { ...current, ...data } : current
+      );
       showAlert("CV uploaded and ready to use");
-    } else {
+    } catch {
       showAlert("CV upload failed", "error");
     }
   };
+
+  if (!profile) {
+    return <div>Loading profile...</div>;
+  }
+
+  const isSaving = updateProfileMutation.isPending;
+  const isUploading = avatarMutation.isPending || cvMutation.isPending;
 
   return (
     <div className="space-y-8">
@@ -122,13 +133,7 @@ export default function ProfileClient({
         <p className="text-gray-600">Manage your account information and preferences</p>
       </div>
 
-      {alert && (
-        <Alert
-          type={alert.type}
-          message={alert.msg}
-          onClose={() => setAlert(null)}
-        />
-      )}
+      {alert && <Alert type={alert.type} message={alert.msg} onClose={() => setAlert(null)} />}
 
       {/* Account Overview */}
       <Card>
@@ -171,11 +176,7 @@ export default function ProfileClient({
               <div>
                 <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Subscription</p>
                 <Badge
-                  variant={
-                    profile.subscriptionStatus === "active"
-                      ? "success"
-                      : "warning"
-                  }
+                  variant={profile.subscriptionStatus === "active" ? "success" : "warning"}
                 >
                   {profile.subscriptionStatus || "inactive"}
                 </Badge>
@@ -195,7 +196,7 @@ export default function ProfileClient({
                   const file = e.currentTarget.files?.[0];
                   if (file) uploadAvatar(file);
                 }}
-                disabled={uploading}
+                disabled={isUploading}
               />
             </div>
           </div>
@@ -243,7 +244,7 @@ export default function ProfileClient({
           <Button
             type="submit"
             variant="primary"
-            isLoading={saving}
+            isLoading={isSaving}
             loadingText="Saving..."
             className="w-full"
           >
@@ -264,8 +265,7 @@ export default function ProfileClient({
                     📄 {profile.cvOriginalName}
                   </p>
                   <p className="text-sm text-gray-600">
-                    Uploaded{" "}
-                    {new Date(profile.cvUploadedAt || "").toLocaleDateString()}
+                    Uploaded {new Date(profile.cvUploadedAt || "").toLocaleDateString()}
                   </p>
                 </div>
                 <a
@@ -288,7 +288,7 @@ export default function ProfileClient({
             type="button"
             variant="secondary"
             onClick={() => cvInputRef.current?.click()}
-            isLoading={uploading}
+            isLoading={isUploading}
             loadingText="Uploading..."
             className="w-full"
           >
@@ -303,11 +303,9 @@ export default function ProfileClient({
               const file = e.currentTarget.files?.[0];
               if (file) uploadCv(file);
             }}
-            disabled={uploading}
+            disabled={isUploading}
           />
-          <p className="text-xs text-gray-500">
-            Only PDF files are accepted. Maximum size: 10MB
-          </p>
+          <p className="text-xs text-gray-500">Only PDF files are accepted. Maximum size: 10MB</p>
         </div>
       </Card>
 

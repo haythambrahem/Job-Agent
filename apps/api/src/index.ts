@@ -8,13 +8,11 @@ import type Stripe from "stripe";
 import multer from "multer";
 import sharp from "sharp";
 import bcrypt from "bcryptjs";
+import compression from "compression";
 import {
   buildEmailHtml,
-  type CoverLetterContent,
   createPendingApplication,
-  readCV,
-  scrapeMatchAndStoreJobs,
-  type Application
+  readCV
 } from "@job-agent/core";
 import { z } from "zod";
 import { prisma } from "./lib/prisma.js";
@@ -26,19 +24,19 @@ import { requireGmail } from "./middleware/requireGmail.js";
 import { requirePlan } from "./middleware/subscription.js";
 import { gmailRouter } from "./modules/gmail/gmail.routes.js";
 import { logger } from "./lib/logger.js";
+import { store } from "./lib/store.js";
+import { parseCoverLetterContent } from "./lib/coverLetter.js";
+import { scrapeQueue } from "./queues/scrape.queue.js";
 import "./workers/email.worker.js";
+import "./workers/scrape.worker.js";
 
-const AUTO_APPLY_MIN_SCORE = 70;
-const AUTO_APPLY_LIMIT = 3;
-const AUTO_APPLY_DELAY_RANGE_MS = { min: 2000, max: 5000 };
 const FREE_PLAN_MONTHLY_LIMIT = 10;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
 const PLAN_PRICE_MAP: Record<"pro" | "premium", string> = {
   pro: STRIPE_PRICE_PRO,
   premium: STRIPE_PRICE_PREMIUM
 };
-
-type AutoAppliedJob = { title: string; company: string; url: string; score: number; applicationId: string };
-type AutoApplySkippedJob = { title: string; company: string; url: string; score: number; reason: string };
 
 const jobSearchSchema = z.object({
   keywords: z.string().min(1),
@@ -112,7 +110,6 @@ const io = new Server(server, {
   cors: { origin: process.env.WEB_ORIGIN || "http://localhost:3000", credentials: true }
 });
 
-const searchQueue = new TaskQueue(2);
 const applicationQueue = new TaskQueue(2);
 
 const avatarUpload = multer({
@@ -136,14 +133,6 @@ function resolveUploadPath(storedPath: string): string {
   return path.join(process.cwd(), storedPath.replace(/^\/+/, ""));
 }
 
-function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function startOfCurrentMonthUtc(): Date {
   const now = new Date();
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
@@ -159,31 +148,26 @@ function getFirstParam(value: string | string[] | undefined): string | null {
   return null;
 }
 
-function parseCoverLetterContent(coverLetterJson: string, fallbackTitle: string, fallbackCompany: string): CoverLetterContent {
-  try {
-    const parsed = JSON.parse(coverLetterJson) as Partial<CoverLetterContent>;
-    if (
-      typeof parsed.subject === "string" &&
-      typeof parsed.opening === "string" &&
-      typeof parsed.body === "string" &&
-      typeof parsed.closing === "string"
-    ) {
-      return {
-        subject: parsed.subject,
-        opening: parsed.opening,
-        body: parsed.body,
-        closing: parsed.closing
-      };
-    }
-  } catch {
-    // fallback below
-  }
+function parsePagination(query: Record<string, unknown>) {
+  const pageParam = getFirstParam(query.page as string | string[] | undefined);
+  const pageSizeParam =
+    getFirstParam(query.pageSize as string | string[] | undefined) ||
+    getFirstParam(query.limit as string | string[] | undefined);
+
+  const pageNumber = pageParam ? Number(pageParam) : 1;
+  const pageSizeNumber = pageSizeParam ? Number(pageSizeParam) : DEFAULT_PAGE_SIZE;
+
+  const page = Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : 1;
+  const pageSize =
+    Number.isFinite(pageSizeNumber) && pageSizeNumber > 0
+      ? Math.min(pageSizeNumber, MAX_PAGE_SIZE)
+      : DEFAULT_PAGE_SIZE;
 
   return {
-    subject: `Application for ${fallbackTitle} — Haytham Brahem`,
-    opening: `Dear Hiring Manager at ${fallbackCompany},`,
-    body: coverLetterJson,
-    closing: "Thank you for your time and consideration."
+    page,
+    pageSize,
+    skip: (page - 1) * pageSize,
+    take: pageSize
   };
 }
 
@@ -335,47 +319,55 @@ async function handleSubscriptionCancelled(subscription: Stripe.Subscription): P
 app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
 app.post("/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
 
+app.use(compression({ level: 6 }));
+app.set("json spaces", 0);
 app.use(express.json({ limit: "200kb" }));
 app.use(basicRateLimit);
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.use("/gmail", gmailRouter);
 
-const store = {
-  async saveJobs(userId: string, jobs: Array<{ title: string; company: string; url: string; source: string; applyEmail?: string | null }>): Promise<void> {
-    for (const job of jobs) {
-      await prisma.job.upsert({
-        where: { userId_url: { userId, url: job.url } },
-        update: { title: job.title, company: job.company, source: job.source, applyEmail: job.applyEmail ?? null },
-        create: { ...job, userId }
-      });
-    }
-  },
-  createApplication(
-    userId: string,
-    input: {
-      company: string;
-      title: string;
-      email?: string | null;
-      coverLetter: string;
-      status: "pending" | "approved" | "rejected" | "sent";
-    }
-  ): Promise<Application> {
-    return prisma.application.create({ data: { ...input, userId } }) as unknown as Promise<Application>;
-  },
-  findApplicationById(userId: string, id: string): Promise<Application | null> {
-    return prisma.application.findFirst({ where: { id, userId } }) as unknown as Promise<Application | null>;
-  },
-  async updateApplicationStatus(userId: string, id: string, status: "pending" | "approved" | "rejected" | "sent"): Promise<Application> {
-    return prisma.application.update({ where: { id_userId: { id, userId } }, data: { status } }) as unknown as Promise<Application>;
-  },
-  async createAIRun(userId: string, input: { type: string; status: string }): Promise<void> {
-    await prisma.aIRun.create({ data: { userId, type: input.type, status: input.status } });
-  },
-  async getCvSummary(userId: string): Promise<string | null> {
-    const profile = await prisma.cvProfile.findUnique({ where: { userId } });
-    return profile?.summary || profile?.rawText || null;
-  }
-};
+const PROFILE_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  image: true,
+  phone: true,
+  location: true,
+  plan: true,
+  subscriptionStatus: true,
+  cvPath: true,
+  cvOriginalName: true,
+  cvUploadedAt: true,
+  createdAt: true
+} as const;
+
+async function getProfileSnapshot(userId: string) {
+  return prisma.user.findUnique({
+    where: { id: userId },
+    select: PROFILE_SELECT
+  });
+}
+
+async function getSubscriptionSnapshot(userId: string) {
+  const monthStart = startOfCurrentMonthUtc();
+  const nextMonthStart = startOfNextMonthUtc(monthStart);
+
+  const [usedApplications, user] = await Promise.all([
+    prisma.application.count({
+      where: { userId, createdAt: { gte: monthStart, lt: nextMonthStart } }
+    }),
+    prisma.user.findUnique({ where: { id: userId } })
+  ]);
+
+  const plan = user?.plan || "free";
+
+  return {
+    plan,
+    usedApplications,
+    monthlyLimit: plan === "free" ? FREE_PLAN_MONTHLY_LIMIT : null,
+    subscriptionStatus: user?.subscriptionStatus || "inactive"
+  };
+}
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
@@ -395,23 +387,7 @@ app.get("/profile", async (req, res) => {
     return;
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      image: true,
-      phone: true,
-      location: true,
-      plan: true,
-      subscriptionStatus: true,
-      cvPath: true,
-      cvOriginalName: true,
-      cvUploadedAt: true,
-      createdAt: true
-    }
-  });
+  const user = await getProfileSnapshot(userId);
 
   if (!user) {
     res.status(404).json({ error: "User not found" });
@@ -419,6 +395,40 @@ app.get("/profile", async (req, res) => {
   }
 
   res.json(user);
+});
+
+app.get("/dashboard/overview", async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const { skip, take } = parsePagination(req.query as Record<string, unknown>);
+
+  const [profile, jobs, applications, subscription] = await Promise.all([
+    getProfileSnapshot(userId),
+    prisma.job.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take
+    }),
+    prisma.application.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take
+    }),
+    getSubscriptionSnapshot(userId)
+  ]);
+
+  if (!profile) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  res.json({ profile, jobs, applications, subscription });
 });
 
 app.patch("/profile", async (req, res) => {
@@ -589,22 +599,8 @@ app.get("/subscription", async (req, res) => {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
-  const monthStart = startOfCurrentMonthUtc();
-  const nextMonthStart = startOfNextMonthUtc(monthStart);
-
-  const usedApplications = await prisma.application.count({
-    where: { userId, createdAt: { gte: monthStart, lt: nextMonthStart } }
-  });
-
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  const plan = user?.plan || "free";
-
-  res.json({
-    plan,
-    usedApplications,
-    monthlyLimit: plan === "free" ? FREE_PLAN_MONTHLY_LIMIT : null,
-    subscriptionStatus: user?.subscriptionStatus || "inactive"
-  });
+  const snapshot = await getSubscriptionSnapshot(userId);
+  res.json(snapshot);
 });
 
 app.post("/stripe/checkout", async (req, res) => {
@@ -676,7 +672,13 @@ app.post("/stripe/portal", async (req, res) => {
 });
 
 app.get("/jobs", async (req, res) => {
-  const jobs = await prisma.job.findMany({ where: { userId: req.user!.id }, orderBy: { createdAt: "desc" } });
+  const { skip, take } = parsePagination(req.query as Record<string, unknown>);
+  const jobs = await prisma.job.findMany({
+    where: { userId: req.user!.id },
+    orderBy: { createdAt: "desc" },
+    skip,
+    take
+  });
   res.json(jobs);
 });
 
@@ -703,19 +705,16 @@ app.post("/jobs/search", requirePlan("pro"), requireGmail, async (req, res) => {
   }
 
   try {
-    const jobs = await searchQueue.enqueue(() =>
-      scrapeMatchAndStoreJobs({
-        userId,
-        input: {
-          keywords: parsed.data.keywords,
-          location: parsed.data.location,
-          limitPerSource: parsed.data.limitPerSource ?? 5
-        },
-        store,
-        minScore: AUTO_APPLY_MIN_SCORE
-      })
-    );
-    res.json({ jobs });
+    const job = await scrapeQueue.add("job-search", {
+      userId,
+      type: "search",
+      input: {
+        keywords: parsed.data.keywords,
+        location: parsed.data.location,
+        limitPerSource: parsed.data.limitPerSource ?? 5
+      }
+    });
+    res.status(202).json({ jobId: job.id });
   } catch (error: unknown) {
     res.status(500).json({ error: getErrorMessage(error, "job search failed") });
   }
@@ -744,97 +743,51 @@ app.post("/jobs/auto-apply", requirePlan("premium"), requireGmail, async (req, r
   }
 
   try {
-    const result = await searchQueue.enqueue(async () => {
-      logger.info({ userId, keywords: parsed.data.keywords }, "Auto-apply started");
-      const rankedJobs = await scrapeMatchAndStoreJobs({
-        userId,
-        input: {
-          keywords: parsed.data.keywords,
-          location: parsed.data.location,
-          limitPerSource: parsed.data.limitPerSource ?? 5
-        },
-        store,
-        minScore: AUTO_APPLY_MIN_SCORE
-      });
-      logger.info({ userId, rankedJobs: rankedJobs.length }, "Auto-apply ranked jobs");
-
-      const candidates = rankedJobs.filter((job) => job.score >= AUTO_APPLY_MIN_SCORE).slice(0, AUTO_APPLY_LIMIT);
-      logger.info({ userId, selectedJobs: candidates.length }, "Auto-apply selected jobs");
-
-      const applied: AutoAppliedJob[] = [];
-      const skipped: AutoApplySkippedJob[] = [];
-
-      for (let index = 0; index < candidates.length; index += 1) {
-        const job = candidates[index];
-        if (!job) continue;
-        logger.info({ userId, index: index + 1, total: candidates.length, title: job.title, score: job.score }, "Auto-apply attempting job");
-
-        if (!job.applyEmail) {
-          logger.info({ userId, title: job.title }, "Auto-apply skipped missing recipient email");
-          skipped.push({ title: job.title, company: job.company, url: job.url, score: job.score, reason: "missing_apply_email" });
-          continue;
-        }
-
-        try {
-          const sent = await applicationQueue.enqueue(async () => {
-            const application = await createPendingApplication(userId, {
-              company: job.company,
-              title: job.title,
-              recipientEmail: job.applyEmail,
-              jobDescription: job.description,
-              store
-            });
-            const coverLetter = parseCoverLetterContent(application.coverLetter, application.title, application.company);
-            const recipientTo = application.email ?? job.applyEmail;
-            if (!recipientTo) {
-              throw new Error("NO_RECIPIENT_EMAIL");
-            }
-            await prisma.application.update({
-              where: { id_userId: { id: application.id, userId } },
-              data: { status: "approved" }
-            });
-            const { emailQueue } = await import("./queues/email.queue.js");
-            await emailQueue.add("application-email", {
-              userId,
-              type: "application",
-              to: recipientTo,
-              subject: coverLetter.subject,
-              htmlBody: buildEmailHtml(coverLetter),
-              applicationId: application.id,
-              cvPath: user.cvPath ?? undefined
-            });
-            return prisma.application.findFirstOrThrow({
-              where: { id: application.id, userId }
-            });
-          });
-          applied.push({ title: job.title, company: job.company, url: job.url, score: job.score, applicationId: sent.id });
-          logger.info({ userId, applicationId: sent.id, title: job.title }, "Auto-apply queued application");
-        } catch (error: unknown) {
-          logger.error({ userId, title: job.title, error: getErrorMessage(error, "unknown") }, "Auto-apply failed");
-          skipped.push({ title: job.title, company: job.company, url: job.url, score: job.score, reason: "apply_failed" });
-        }
-
-        if (index < candidates.length - 1) {
-          const delayMs = randomInt(AUTO_APPLY_DELAY_RANGE_MS.min, AUTO_APPLY_DELAY_RANGE_MS.max);
-          logger.info({ userId, delayMs }, "Auto-apply waiting before next application");
-          await delay(delayMs);
-        }
+    const job = await scrapeQueue.add("job-auto-apply", {
+      userId,
+      type: "auto-apply",
+      input: {
+        keywords: parsed.data.keywords,
+        location: parsed.data.location,
+        limitPerSource: parsed.data.limitPerSource ?? 5
       }
-
-      logger.info({ userId, applied: applied.length, skipped: skipped.length }, "Auto-apply completed");
-      return { rankedJobs, applied, skipped };
     });
-
-    res.json(result);
+    res.status(202).json({ jobId: job.id });
   } catch (error: unknown) {
     res.status(500).json({ error: getErrorMessage(error, "auto-apply failed") });
   }
 });
 
+app.get("/scrape/status/:id", async (req, res) => {
+  const jobId = getFirstParam(req.params.id);
+  if (!jobId) {
+    res.status(400).json({ error: "Invalid job id" });
+    return;
+  }
+
+  const job = await scrapeQueue.getJob(jobId);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+
+  const status = await job.getState();
+  res.json({
+    id: job.id,
+    status,
+    type: job.data.type,
+    result: status === "completed" ? job.returnvalue : undefined,
+    error: status === "failed" ? job.failedReason : undefined
+  });
+});
+
 app.get("/applications", async (req, res) => {
+  const { skip, take } = parsePagination(req.query as Record<string, unknown>);
   const applications = await prisma.application.findMany({
     where: { userId: req.user!.id },
-    orderBy: { createdAt: "desc" }
+    orderBy: { createdAt: "desc" },
+    skip,
+    take
   });
   res.json(applications);
 });
