@@ -1,46 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Alert from "@/components/ui/Alert";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Card from "@/components/ui/Card";
+import { apiFetch, ApiError } from "@/hooks/apiClient";
+import { useDashboardOverview } from "@/hooks/useDashboardOverview";
+import { useScrapeStatus } from "@/hooks/useScrapeStatus";
+import type { Application, ApplicationStatus, Job } from "@/hooks/types";
 
 type Page = "dashboard" | "jobs" | "applications" | "billing";
-type ApplicationStatus = "pending" | "approved" | "rejected" | "sent";
 
-type Job = {
-  id: string;
-  title: string;
-  company: string;
-  url: string;
-  source: string;
-  applyEmail?: string | null;
-};
-
-type Application = {
-  id: string;
-  company: string;
-  title: string;
-  email: string | null;
-  coverLetter: string;
-  status: ApplicationStatus;
-  createdAt: string;
-};
-
-type Subscription = {
-  plan: "free" | "pro" | "premium";
-  usedApplications: number;
-  monthlyLimit: number | null;
-  subscriptionStatus: string;
-};
-
-type RequestError = Error & {
-  code?: string;
-};
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
+type RequestError = ApiError;
 
 // KPI Card Component
 function KPICard({
@@ -84,21 +58,35 @@ export default function DashboardClient({
   apiToken: string;
   initialPage?: Page;
 }) {
+  const queryClient = useQueryClient();
   const [page, setPage] = useState<Page>(initialPage);
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [applications, setApplications] = useState<Application[]>([]);
-  const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [keywords, setKeywords] = useState("full stack");
   const [location, setLocation] = useState("Tunisie");
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [manualEmails, setManualEmails] = useState<Record<string, string>>({});
   const [emailEditJobId, setEmailEditJobId] = useState<string | null>(null);
+  const [searchJobId, setSearchJobId] = useState<string | null>(null);
 
-  const pendingCount = useMemo(() => applications.filter((a) => a.status === "pending").length, [applications]);
-  const sentCount = useMemo(() => applications.filter((a) => a.status === "sent").length, [applications]);
-  const approvedCount = useMemo(() => applications.filter((a) => a.status === "approved").length, [applications]);
+  const dashboardQuery = useDashboardOverview(apiToken, user.id);
+  const searchStatusQuery = useScrapeStatus(apiToken, searchJobId);
+
+  const jobs = dashboardQuery.data?.jobs ?? [];
+  const applications = dashboardQuery.data?.applications ?? [];
+  const subscription = dashboardQuery.data?.subscription ?? null;
+
+  const pendingCount = useMemo(
+    () => applications.filter((a) => a.status === "pending").length,
+    [applications]
+  );
+  const sentCount = useMemo(
+    () => applications.filter((a) => a.status === "sent").length,
+    [applications]
+  );
+  const approvedCount = useMemo(
+    () => applications.filter((a) => a.status === "approved").length,
+    [applications]
+  );
 
   function getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : "Request failed";
@@ -112,72 +100,76 @@ export default function DashboardClient({
     return undefined;
   }
 
-  async function apiCall<T>(path: string, init?: RequestInit): Promise<T> {
-    if (!apiToken) {
-      throw new Error("Unauthorized");
-    }
-
-    const response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiToken}`,
-        ...(init?.headers || {})
-      }
-    });
-
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({ error: "Request failed" }));
-      const requestError = new Error(body.error || "Request failed") as Error & {
-        code?: string;
-      };
-      requestError.code = typeof body.error === "string" ? body.error : undefined;
-      throw requestError;
-    }
-
-    return response.json() as Promise<T>;
-  }
-
-  async function refresh() {
-    const [jobsRes, applicationsRes, subscriptionRes] = await Promise.all([
-      apiCall<Job[]>("/jobs"),
-      apiCall<Application[]>("/applications"),
-      apiCall<Subscription>("/subscription")
-    ]);
-
-    setJobs(jobsRes);
-    setApplications(applicationsRes);
-    setSubscription(subscriptionRes);
-  }
-
-  async function runSearch() {
-    setIsLoading(true);
-    setError(null);
-    try {
-      await apiCall<{ jobs: Job[] }>("/jobs/search", {
+  const searchMutation = useMutation({
+    mutationFn: async () =>
+      apiFetch<{ jobId: string }>("/jobs/search", apiToken, {
         method: "POST",
         body: JSON.stringify({ keywords, location, limitPerSource: 5 })
-      });
-      await refresh();
+      })
+  });
+
+  const applyMutation = useMutation({
+    mutationFn: async (payload: { jobId: string; email?: string }) =>
+      apiFetch("/applications/apply", apiToken, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      })
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async (payload: { id: string; action: "approve" | "reject" }) =>
+      apiFetch(`/applications/${payload.id}/${payload.action}`, apiToken, { method: "POST" })
+  });
+
+  const checkoutMutation = useMutation({
+    mutationFn: async (plan: "pro" | "premium") =>
+      apiFetch<{ url: string }>("/stripe/checkout", apiToken, {
+        method: "POST",
+        body: JSON.stringify({ plan })
+      })
+  });
+
+  const portalMutation = useMutation({
+    mutationFn: async () =>
+      apiFetch<{ url: string }>("/stripe/portal", apiToken, { method: "POST" })
+  });
+
+  useEffect(() => {
+    if (!searchJobId) return;
+    const status = searchStatusQuery.data?.status;
+    if (!status) return;
+
+    if (status === "completed") {
+      queryClient.invalidateQueries({ queryKey: ["dashboard-overview", user.id] });
+      setSearchJobId(null);
+      setToast("Job search completed. Results refreshed.");
+    }
+
+    if (status === "failed") {
+      setSearchJobId(null);
+      setError(searchStatusQuery.data?.error ?? "Job search failed.");
+    }
+  }, [queryClient, searchJobId, searchStatusQuery.data?.error, searchStatusQuery.data?.status, user.id]);
+
+  async function runSearch() {
+    setError(null);
+    setToast(null);
+    try {
+      const response = await searchMutation.mutateAsync();
+      setSearchJobId(response.jobId);
+      setToast("Job search started. We will refresh when it completes.");
     } catch (err: unknown) {
       setError(getErrorMessage(err));
-    } finally {
-      setIsLoading(false);
     }
   }
 
   async function applyToJob(jobId: string) {
-    setIsLoading(true);
     setError(null);
     setToast(null);
     try {
       const email = manualEmails[jobId]?.trim();
-      await apiCall("/applications/apply", {
-        method: "POST",
-        body: JSON.stringify({ jobId, email: email || undefined })
-      });
-      await refresh();
+      await applyMutation.mutateAsync({ jobId, email: email || undefined });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard-overview", user.id] });
       setEmailEditJobId(null);
       setPage("applications");
     } catch (err: unknown) {
@@ -188,8 +180,6 @@ export default function DashboardClient({
         return;
       }
       setError(getErrorMessage(err));
-    } finally {
-      setIsLoading(false);
     }
   }
 
@@ -197,8 +187,8 @@ export default function DashboardClient({
     setError(null);
     setToast(null);
     try {
-      await apiCall(`/applications/${id}/${action}`, { method: "POST" });
-      await refresh();
+      await updateMutation.mutateAsync({ id, action });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard-overview", user.id] });
     } catch (err: unknown) {
       if (getErrorCode(err) === "NO_RECIPIENT_EMAIL") {
         setToast("No contact email found for this job. Add it manually in the job card.");
@@ -212,10 +202,7 @@ export default function DashboardClient({
   async function openCheckout(plan: "pro" | "premium") {
     setError(null);
     try {
-      const response = await apiCall<{ url: string }>("/stripe/checkout", {
-        method: "POST",
-        body: JSON.stringify({ plan })
-      });
+      const response = await checkoutMutation.mutateAsync(plan);
       window.location.href = response.url;
     } catch (err: unknown) {
       setError(getErrorMessage(err));
@@ -225,20 +212,30 @@ export default function DashboardClient({
   async function openPortal() {
     setError(null);
     try {
-      const response = await apiCall<{ url: string }>("/stripe/portal", { method: "POST" });
+      const response = await portalMutation.mutateAsync();
       window.location.href = response.url;
     } catch (err: unknown) {
       setError(getErrorMessage(err));
     }
   }
 
-  useEffect(() => {
-    if (!apiToken) {
-      return;
-    }
+  const isSearching =
+    searchMutation.isPending ||
+    (searchStatusQuery.data?.status !== "completed" && searchStatusQuery.data?.status !== "failed" && Boolean(searchJobId));
 
-    refresh().catch((err: unknown) => setError(getErrorMessage(err)));
-  }, [apiToken]);
+  const isBusy =
+    dashboardQuery.isLoading ||
+    isSearching ||
+    applyMutation.isPending ||
+    updateMutation.isPending ||
+    checkoutMutation.isPending ||
+    portalMutation.isPending;
+
+  const displayError = error ?? (dashboardQuery.error ? getErrorMessage(dashboardQuery.error) : null);
+
+  if (dashboardQuery.isLoading && !dashboardQuery.data) {
+    return <div>Loading dashboard...</div>;
+  }
 
   const getStatusColor = (status: ApplicationStatus) => {
     switch (status) {
@@ -257,7 +254,7 @@ export default function DashboardClient({
 
   return (
     <div className="space-y-6">
-      {error && <Alert type="error" message={error} onClose={() => setError(null)} />}
+      {displayError && <Alert type="error" message={displayError} onClose={() => setError(null)} />}
       {toast && <Alert type="info" message={toast} onClose={() => setToast(null)} />}
 
       {page === "dashboard" && (
@@ -332,7 +329,7 @@ export default function DashboardClient({
                   placeholder="e.g., React, Full Stack, Web Developer"
                   value={keywords}
                   onChange={(e) => setKeywords(e.target.value)}
-                  disabled={isLoading}
+                  disabled={isBusy}
                 />
               </div>
               <div>
@@ -342,18 +339,23 @@ export default function DashboardClient({
                   placeholder="e.g., San Francisco, Remote, USA"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
-                  disabled={isLoading}
+                  disabled={isBusy}
                 />
               </div>
               <Button
                 onClick={runSearch}
-                disabled={isLoading}
-                isLoading={isLoading}
+                disabled={isBusy}
+                isLoading={isSearching}
                 variant="primary"
                 className="w-full"
               >
-                Search Jobs
+                {isSearching ? "Searching..." : "Search Jobs"}
               </Button>
+              {searchStatusQuery.data?.status && searchStatusQuery.data?.status !== "completed" && (
+                <p className="text-xs text-gray-500">
+                  Search status: {searchStatusQuery.data.status.replace(/_/g, " ")}
+                </p>
+              )}
             </div>
           </Card>
 
@@ -366,7 +368,7 @@ export default function DashboardClient({
                 <p className="text-gray-500 text-sm">No jobs found. Try searching with different keywords.</p>
               </Card>
             ) : (
-              jobs.map((job) => (
+              jobs.map((job: Job) => (
                 <Card key={job.id} hover>
                   <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                     <div className="flex-1">
@@ -405,7 +407,7 @@ export default function DashboardClient({
                             applyToJob(job.id);
                           }
                         }}
-                        isLoading={isLoading}
+                        isLoading={applyMutation.isPending}
                       >
                         {emailEditJobId === job.id ? "Submit" : "Apply"}
                       </Button>
@@ -434,7 +436,7 @@ export default function DashboardClient({
                 <p className="text-gray-500 text-sm">No applications yet. Search for jobs and apply to get started.</p>
               </Card>
             ) : (
-              applications.map((application) => (
+              applications.map((application: Application) => (
                 <Card key={application.id} hover>
                   <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                     <div className="flex-1">
@@ -455,7 +457,7 @@ export default function DashboardClient({
                           variant="primary"
                           size="sm"
                           onClick={() => updateApplication(application.id, "approve")}
-                          isLoading={isLoading}
+                          isLoading={updateMutation.isPending}
                         >
                           Approve
                         </Button>
@@ -463,7 +465,7 @@ export default function DashboardClient({
                           variant="danger"
                           size="sm"
                           onClick={() => updateApplication(application.id, "reject")}
-                          isLoading={isLoading}
+                          isLoading={updateMutation.isPending}
                         >
                           Reject
                         </Button>

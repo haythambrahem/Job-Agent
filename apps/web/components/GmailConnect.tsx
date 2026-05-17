@@ -1,104 +1,86 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-
-interface GmailStatus {
-  connected: boolean;
-  email?: string;
-  expiresAt?: number;
-}
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetch, ApiError } from "@/hooks/apiClient";
+import type { GmailStatus } from "@/hooks/types";
 
 export default function GmailConnect({ apiToken }: { apiToken: string }) {
   const { data: session } = useSession();
   const searchParams = useSearchParams();
-  const [status, setStatus] = useState<GmailStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [connectLoading, setConnectLoading] = useState(false);
+  const queryClient = useQueryClient();
   const [connectError, setConnectError] = useState<string | null>(null);
 
   const authToken = session?.accessToken ?? apiToken;
-  const headers = useMemo(() => {
-    if (!authToken) return null;
-    return {
-      Authorization: `Bearer ${authToken}`
-    };
-  }, [authToken]);
+  const hasAuth = Boolean(authToken);
 
-  useEffect(() => {
-    if (!headers) {
-      setLoading(false);
-      setStatus({ connected: false });
-      return;
-    }
+  const statusQuery = useQuery<GmailStatus, ApiError>({
+    queryKey: ["gmail-status", authToken],
+    enabled: hasAuth,
+    queryFn: () => apiFetch<GmailStatus>("/gmail/status", authToken ?? "")
+  });
 
-    void fetch(`${API_BASE_URL}/gmail/status`, { headers })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error("Failed to load Gmail status");
-        }
-        return response.json() as Promise<GmailStatus>;
-      })
-      .then(setStatus)
-      .catch(() => setStatus({ connected: false }))
-      .finally(() => setLoading(false));
-  }, [headers]);
+  const status = statusQuery.data ?? { connected: false };
+  const loading = hasAuth ? statusQuery.isLoading : false;
+
+  const connectMutation = useMutation({
+    mutationFn: async () => apiFetch<{ url?: string }>("/gmail/connect", authToken ?? "", { headers: { Accept: "application/json" } })
+  });
+
+  const disconnectMutation = useMutation({
+    mutationFn: async () => apiFetch("/gmail/disconnect", authToken ?? "", { method: "DELETE" })
+  });
 
   const gmailParam = searchParams.get("gmail");
 
-  const handleConnect = async () => {
-    if (!headers) {
-      setConnectError("Your session has expired. Please sign in again and retry.");
-      return;
-    }
-
-    setConnectLoading(true);
-    setConnectError(null);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/gmail/connect`, {
-        headers: {
-          ...headers,
-          Accept: "application/json"
+  const handleConnect = useCallback(
+    () =>
+      async () => {
+        if (!authToken) {
+          setConnectError("Your session has expired. Please sign in again and retry.");
+          return;
         }
-      });
 
-      if (response.status === 401) {
-        setConnectError("Your session has expired. Please sign in again and retry.");
-        return;
-      }
+        setConnectError(null);
 
-      if (!response.ok) {
-        setConnectError("Could not start Gmail connection. Please try again.");
-        return;
-      }
+        try {
+          const data = await connectMutation.mutateAsync();
+          if (!data.url) {
+            setConnectError("Could not start Gmail connection. Please try again.");
+            return;
+          }
+          window.location.href = data.url;
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 401) {
+            setConnectError("Your session has expired. Please sign in again and retry.");
+            return;
+          }
+          setConnectError("Could not start Gmail connection. Please try again.");
+        }
+      },
+    [authToken, connectMutation]
+  );
 
-      const data = (await response.json()) as { url?: string };
-      if (!data.url) {
-        setConnectError("Could not start Gmail connection. Please try again.");
-        return;
-      }
+  const handleDisconnect = useCallback(
+    () =>
+      async () => {
+        if (!confirm("Disconnect Gmail? You will not be able to apply until reconnected.")) return;
+        if (!authToken) {
+          setConnectError("Your session has expired. Please sign in again and retry.");
+          return;
+        }
 
-      window.location.href = data.url;
-    } catch {
-      setConnectError("Could not start Gmail connection. Please try again.");
-    } finally {
-      setConnectLoading(false);
-    }
-  };
-
-  const handleDisconnect = async () => {
-    if (!confirm("Disconnect Gmail? You will not be able to apply until reconnected.")) return;
-    if (!headers) {
-      setConnectError("Your session has expired. Please sign in again and retry.");
-      return;
-    }
-    await fetch(`${API_BASE_URL}/gmail/disconnect`, { method: "DELETE", headers });
-    setStatus({ connected: false });
-  };
+        try {
+          await disconnectMutation.mutateAsync();
+          queryClient.setQueryData(["gmail-status", authToken], { connected: false });
+        } catch {
+          setConnectError("Failed to disconnect Gmail. Please try again.");
+        }
+      },
+    [authToken, disconnectMutation, queryClient]
+  );
 
   if (loading) return <div>Loading Gmail status...</div>;
 
@@ -132,7 +114,7 @@ export default function GmailConnect({ apiToken }: { apiToken: string }) {
         </div>
       )}
 
-      {status?.connected ? (
+      {status.connected ? (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 500 }}>Gmail connected</div>
@@ -167,7 +149,7 @@ export default function GmailConnect({ apiToken }: { apiToken: string }) {
             onClick={() => {
               void handleConnect();
             }}
-            disabled={connectLoading}
+            disabled={connectMutation.isPending}
             style={{
               fontSize: 12,
               padding: "6px 14px",
@@ -175,11 +157,11 @@ export default function GmailConnect({ apiToken }: { apiToken: string }) {
               color: "#fff",
               border: "none",
               borderRadius: "var(--border-radius-md)",
-              cursor: connectLoading ? "not-allowed" : "pointer",
-              opacity: connectLoading ? 0.7 : 1
+              cursor: connectMutation.isPending ? "not-allowed" : "pointer",
+              opacity: connectMutation.isPending ? 0.7 : 1
             }}
           >
-            {connectLoading ? "Connecting..." : "Connect Gmail"}
+            {connectMutation.isPending ? "Connecting..." : "Connect Gmail"}
           </button>
         </div>
       )}
