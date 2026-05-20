@@ -44,9 +44,9 @@ export default function SignInPage() {
       <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-200 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-2000"></div>
       <div className="absolute -bottom-8 left-1/2 w-96 h-96 bg-orange-200 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-4000"></div>
 
-      <div className="relative w-full max-w-md">
+      <div className="relative w-full max-w-md z-10">
         {/* Welcome card */}
-        <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-8 md:p-12">
+        <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 p-8 md:p-12">
           {/* Header */}
           <div className="text-center mb-8">
             <div className="inline-flex items-center justify-center w-12 h-12 bg-gradient-to-br from-blue-500 to-emerald-500 rounded-lg mb-4">
@@ -59,12 +59,12 @@ export default function SignInPage() {
               </svg>
             </div>
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Job Agent</h1>
-            <p className="text-gray-600">Welcome back! Sign in to your account</p>
+            <p className="text-gray-700 font-medium">Welcome back! Sign in to your account</p>
           </div>
 
           {/* Error message */}
           {error && (
-            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+            <div className="mb-6 p-4 bg-red-50 border-2 border-red-400 rounded-lg flex items-start gap-3">
               <svg
                 className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5"
                 fill="currentColor"
@@ -76,7 +76,7 @@ export default function SignInPage() {
                   clipRule="evenodd"
                 />
               </svg>
-              <p className="text-red-700 font-medium text-sm">{error}</p>
+              <p className="text-red-800 font-semibold text-sm">{error}</p>
             </div>
           )}
 
@@ -94,12 +94,12 @@ export default function SignInPage() {
 
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="block text-sm font-semibold text-gray-900">
+                <label className="block text-sm font-bold text-gray-900">
                   Password
                 </label>
                 <Link
                   href="/forgot-password"
-                  className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors"
+                  className="text-sm font-semibold text-blue-600 hover:text-blue-800 transition-colors"
                 >
                   Forgot?
                 </Link>
@@ -113,13 +113,14 @@ export default function SignInPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={loading}
-                  className="w-full h-12 px-4 py-3 border-2 border-gray-300 rounded-lg bg-white text-gray-900 font-medium placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-all duration-200"
+                  className="w-full h-12 px-4 py-3 border-2 border-gray-400 rounded-lg bg-white text-gray-900 font-semibold placeholder-gray-600 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-200 transition-all duration-200"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 transition-colors"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-700 hover:text-gray-900 transition-colors p-1"
                   disabled={loading}
+                  title={showPassword ? "Hide password" : "Show password"}
                 >
                   {showPassword ? (
                     <svg
@@ -167,10 +168,10 @@ export default function SignInPage() {
           {/* Divider */}
           <div className="relative my-6">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-200"></div>
+              <div className="w-full border-t-2 border-gray-300"></div>
             </div>
             <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-white text-gray-500">Or continue with</span>
+              <span className="px-2 bg-white text-gray-700 font-medium">Or continue with</span>
             </div>
           </div>
 
@@ -178,7 +179,7 @@ export default function SignInPage() {
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
-              className="px-4 py-3 border-2 border-gray-300 rounded-lg font-medium text-gray-700 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+              className="px-4 py-3 border-2 border-gray-400 rounded-lg font-semibold text-gray-900 hover:bg-gray-100 hover:border-gray-500 transition-all flex items-center justify-center gap-2"
               disabled={loading}
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
@@ -191,7 +192,7 @@ export default function SignInPage() {
             </button>
             <button
               type="button"
-              className="px-4 py-3 border-2 border-gray-300 rounded-lg font-medium text-gray-700 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+              className="px-4 py-3 border-2 border-gray-400 rounded-lg font-semibold text-gray-900 hover:bg-gray-100 hover:border-gray-500 transition-all flex items-center justify-center gap-2"
               disabled={loading}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -202,18 +203,18 @@ export default function SignInPage() {
           </div>
 
           {/* Sign up link */}
-          <p className="text-center mt-8 text-gray-600">
+          <p className="text-center mt-8 text-gray-900">
             Don't have an account?{" "}
             <Link
               href="/signup"
-              className="font-semibold text-blue-600 hover:text-blue-700 transition-colors"
+              className="font-bold text-blue-600 hover:text-blue-800 transition-colors"
             >
               Create one
             </Link>
           </p>
 
           {/* Trust elements */}
-          <div className="mt-8 pt-8 border-t border-gray-200">
+          <div className="mt-8 pt-8 border-t-2 border-gray-300">
             <div className="flex items-center justify-center gap-4 mb-4">
               <svg
                 className="w-5 h-5 text-emerald-600"
@@ -226,11 +227,11 @@ export default function SignInPage() {
                   clipRule="evenodd"
                 />
               </svg>
-              <span className="text-xs text-gray-600 font-medium">
+              <span className="text-sm text-gray-800 font-semibold">
                 No credit card required
               </span>
             </div>
-            <p className="text-center text-xs text-gray-500">
+            <p className="text-center text-sm text-gray-700 font-medium">
               🔒 256-bit SSL Encryption • GDPR Compliant • SOC 2 Certified
             </p>
           </div>

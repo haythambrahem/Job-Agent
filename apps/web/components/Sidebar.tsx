@@ -85,9 +85,10 @@ export default function Sidebar({
   return (
     <>
       {/* Mobile hamburger menu */}
+      {/*
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="fixed top-4 left-4 z-40 md:hidden p-2 rounded-lg bg-white shadow-md border border-gray-200"
+        className="fixed top-4 left-4 z-40 hidden max-md:flex p-2 rounded-lg bg-white shadow-md border border-gray-200"
       >
         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           {isOpen ? (
@@ -107,19 +108,21 @@ export default function Sidebar({
           )}
         </svg>
       </button>
+      */}
 
       {/* Sidebar overlay on mobile */}
+      {/*
       {isOpen && (
         <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden"
+          className="fixed inset-0 bg-black bg-opacity-50 z-30 hidden max-md:block"
           onClick={() => setIsOpen(false)}
         ></div>
-      )}
+      )}*/}
 
       {/* Sidebar */}
       <aside
-        className={`fixed md:relative top-0 left-0 h-screen w-280 bg-gradient-to-b from-slate-900 to-slate-800 text-white shadow-2xl transition-transform duration-300 z-40 md:translate-x-0 ${
-          isOpen ? "translate-x-0" : "-translate-x-full"
+        className={`relative max-md:fixed top-0 left-0 h-screen w-[280px] flex-shrink-0 bg-gradient-to-b from-slate-900 to-slate-800 text-white shadow-2xl transition-transform duration-300 z-40 ${
+          isOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full"
         } flex flex-col border-r border-slate-700`}
       >
         {/* Logo section */}
